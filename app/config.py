@@ -122,6 +122,10 @@ class Settings(BaseSettings):
         default_factory=dict,
         description="Mapeamento opcional de alias lógico (ex: 'luz_sala') para deviceid hexadecimal real na nuvem eWeLink"
     )
+    EWELINK_DEVICE_KEYS: dict = Field(
+        default_factory=dict,
+        description="Mapeamento opcional de chaves locais LAN (device_id -> {ewelink_device_id, device_key, ip_address, outlet, is_multichannel})"
+    )
     HOME_ASSISTANT_WEBHOOK_URL: str = Field(
         default="",
         description="URL de webhook do Home Assistant para despacho de eventos"

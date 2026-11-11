@@ -24,6 +24,7 @@ from app.schemas import (
     ChatResponse,
     CommandType,
     DecisionOutput,
+    EWeLinkDevicePairRequest,
     FeedbackRequest,
     FeedbackResponse,
     HealthResponse,
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI):
     """Inicialização e desligamento gracioso dos serviços e modelos."""
     logger.info("Iniciando iaparacasa Edge AI Automation Service...")
     c_mgr = get_context_mgr()
+    ewelink_gateway.attach_memory(c_mgr.long_term)
     eng = get_engine()
 
     ram_mb = eng.get_memory_usage_mb()
@@ -368,6 +370,21 @@ def sync_ewelink_devices():
 def login_ewelink_cloud():
     """Autentica no portal CoolKit Open Platform API v2 utilizando credenciais configuradas no .env."""
     return ewelink_gateway.login_cloud()
+
+
+@app.post("/ewelink/devices/pair", tags=["Gateway eWeLink"])
+def pair_ewelink_device_lan(request: EWeLinkDevicePairRequest):
+    """Registra/persiste no SQLite a devicekey AES-128 e parâmetros LAN de um dispositivo eWeLink."""
+    return ewelink_gateway.pair_device(
+        target_device=request.target_device,
+        ewelink_device_id=request.ewelink_device_id,
+        device_key=request.device_key,
+        self_apikey=request.self_apikey,
+        ip_address=request.ip_address,
+        port=request.port,
+        is_multichannel=request.is_multichannel,
+        channel_outlet=request.channel_outlet,
+    )
 
 
 @app.post("/ewelink/control", tags=["Gateway eWeLink"])

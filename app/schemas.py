@@ -230,3 +230,14 @@ class HealthResponse(BaseModel):
     short_term_events_count: int
     long_term_preferences_count: int
 
+
+class EWeLinkDevicePairRequest(BaseModel):
+    target_device: str = Field(..., description="ID lógico do dispositivo (ex: 'luz_sala', 'portao_garagem')")
+    ewelink_device_id: str = Field(..., description="ID hexadecimal de 10 dígitos do hardware na eWeLink")
+    device_key: str = Field(..., description="Chave local AES-128 obtida pela API oficial eWeLink")
+    self_apikey: str = Field(default="123", description="API key do proprietário (apikey)")
+    ip_address: Optional[str] = Field(default=None, description="IP local opcional na LAN")
+    port: int = Field(default=8081, description="Porta HTTP LAN (padrão 8081)")
+    is_multichannel: bool = Field(default=False, description="True para módulos multicanal (switches)")
+    channel_outlet: int = Field(default=0, ge=0, le=7, description="Índice do canal (outlet) para módulos multicanal")
+

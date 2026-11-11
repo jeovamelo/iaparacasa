@@ -165,6 +165,26 @@ class LongTermMemory:
             );
             """)
 
+            # Registro persistente de dispositivos eWeLink e chaves LAN AES (devicekey)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ewelink_device_registry (
+                device_id TEXT PRIMARY KEY,
+                ewelink_device_id TEXT,
+                device_key TEXT,
+                self_apikey TEXT DEFAULT '123',
+                name TEXT,
+                device_type TEXT,
+                group_name TEXT,
+                ip_address TEXT,
+                port INTEGER DEFAULT 8081,
+                is_multichannel INTEGER DEFAULT 0,
+                channel_outlet INTEGER DEFAULT 0,
+                online INTEGER DEFAULT 1,
+                last_state TEXT DEFAULT '{}',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+
             conn.commit()
 
         # Insere preferências iniciais padrão se a base estiver vazia
@@ -427,6 +447,68 @@ class LongTermMemory:
         # Filtra preferências com score mínimo
         top_results = [p for score, p in scored_prefs[:top_k] if score > 0.4]
         return top_results
+
+    def upsert_ewelink_device(self, device: Dict[str, Any]) -> None:
+        """Persiste ou atualiza metadados e chaves locais AES (devicekey) de dispositivos eWeLink."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO ewelink_device_registry (
+                    device_id, ewelink_device_id, device_key, self_apikey, name,
+                    device_type, group_name, ip_address, port, is_multichannel,
+                    channel_outlet, online, last_state, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    ewelink_device_id = COALESCE(excluded.ewelink_device_id, ewelink_device_registry.ewelink_device_id),
+                    device_key = COALESCE(excluded.device_key, ewelink_device_registry.device_key),
+                    self_apikey = COALESCE(excluded.self_apikey, ewelink_device_registry.self_apikey),
+                    name = COALESCE(excluded.name, ewelink_device_registry.name),
+                    device_type = COALESCE(excluded.device_type, ewelink_device_registry.device_type),
+                    group_name = COALESCE(excluded.group_name, ewelink_device_registry.group_name),
+                    ip_address = COALESCE(excluded.ip_address, ewelink_device_registry.ip_address),
+                    port = excluded.port,
+                    is_multichannel = excluded.is_multichannel,
+                    channel_outlet = excluded.channel_outlet,
+                    online = excluded.online,
+                    last_state = excluded.last_state,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    device["device_id"],
+                    device.get("ewelink_device_id"),
+                    device.get("device_key"),
+                    device.get("self_apikey", "123"),
+                    device.get("name"),
+                    device.get("device_type", "latching_relay"),
+                    device.get("group_name", "Atuadores Locais"),
+                    device.get("ip_address"),
+                    int(device.get("port", 8081)),
+                    1 if device.get("is_multichannel") else 0,
+                    int(device.get("channel_outlet", 0)),
+                    1 if device.get("online", True) else 0,
+                    json.dumps(device.get("last_state") or {}),
+                ),
+            )
+            conn.commit()
+
+    def get_ewelink_devices(self) -> List[Dict[str, Any]]:
+        """Recupera dispositivos e chaves locais LAN persistidas para operação offline."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM ewelink_device_registry ORDER BY device_id ASC")
+            rows = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                try:
+                    item["last_state"] = json.loads(item.get("last_state") or "{}")
+                except Exception:
+                    item["last_state"] = {}
+                item["is_multichannel"] = bool(item.get("is_multichannel"))
+                item["online"] = bool(item.get("online"))
+                rows.append(item)
+            return rows
 
     def format_preferences_for_prompt(
         self,

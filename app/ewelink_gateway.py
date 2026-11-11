@@ -4,12 +4,12 @@ Suporta controle local via ZeroConf/mDNS (baixa latência e sem dependência de 
 e fallback para API de Nuvem CoolKit, com garantia física de segurança para relés e portões.
 """
 
-import asyncio
 import base64
 import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import socket
 import time
@@ -26,11 +26,65 @@ from app.schemas import ActionType, CommandType, DecisionOutput, is_momentary_ga
 logger = logging.getLogger("iaparacasa.ewelink")
 
 try:
+    from cryptography.hazmat.primitives import padding as aes_padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    CRYPTOGRAPHY_AVAILABLE = False
+    logger.warning("Pacote 'cryptography' não encontrado. Controle LAN criptografado AES-128-CBC indisponível.")
+
+try:
     from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
     ZEROCONF_AVAILABLE = True
 except ImportError:
     ZEROCONF_AVAILABLE = False
     logger.warning("zeroconf não encontrado. Descoberta mDNS local funcionará via tabela estática.")
+
+
+def encrypt_lan_payload(inner_data: Dict[str, Any], device_key: str) -> Dict[str, str]:
+    """
+    Criptografa o bloco 'data' para o protocolo eWeLink LAN (AES-128-CBC + PKCS7).
+    A chave AES de 128 bits deriva do MD5 da devicekey obtida na eWeLink Open Platform.
+    """
+    if not CRYPTOGRAPHY_AVAILABLE:
+        raise RuntimeError("Biblioteca 'cryptography' necessária para cifra AES-128-CBC LAN.")
+
+    plaintext = json.dumps(inner_data, separators=(",", ":")).encode("utf-8")
+    key = hashlib.md5(device_key.encode("utf-8")).digest()
+    iv = os.urandom(16)
+
+    padder = aes_padding.PKCS7(128).padder()
+    padded = padder.update(plaintext) + padder.finalize()
+
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(padded) + encryptor.finalize()
+
+    return {
+        "data": base64.b64encode(ciphertext).decode("utf-8"),
+        "iv": base64.b64encode(iv).decode("utf-8"),
+    }
+
+
+def decrypt_lan_payload(ciphertext_b64: str, iv_b64: str, device_key: str) -> Dict[str, Any]:
+    """
+    Decifra payloads AES-128-CBC recebidos nos registros TXT mDNS (_ewelink._tcp.local.)
+    ou respostas locais da porta 8081 usando a devicekey do dispositivo.
+    """
+    if not CRYPTOGRAPHY_AVAILABLE:
+        raise RuntimeError("Biblioteca 'cryptography' necessária para decifrar pacotes AES-128-CBC.")
+
+    key = hashlib.md5(device_key.encode("utf-8")).digest()
+    iv = base64.b64decode(iv_b64)
+    ciphertext = base64.b64decode(ciphertext_b64)
+
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+    decryptor = cipher.decryptor()
+    padded = decryptor.update(ciphertext) + decryptor.finalize()
+
+    unpadder = aes_padding.PKCS7(128).unpadder()
+    plaintext = unpadder.update(padded) + unpadder.finalize()
+    return json.loads(plaintext.decode("utf-8"))
 
 
 DEVICE_ALIASES: Dict[str, str] = {
@@ -52,12 +106,25 @@ class SonoffDevice:
     group: str = "Atuadores Locais"
     model_hint: str = "Sonoff Switch"
     ewelink_device_id: Optional[str] = None
+    device_key: Optional[str] = None
+    self_apikey: str = "123"
+    is_multichannel: bool = False
+    channel_outlet: int = 0
     ip_address: Optional[str] = None
     port: int = 8081
     online: bool = True
     last_state: Dict[str, Any] = field(default_factory=dict)
     last_seen: str = field(default_factory=lambda: datetime.now().isoformat())
     mode_available: str = "dual"  # 'lan', 'cloud', 'dual'
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """Serializa o dispositivo mascarando segredos criptográficos para exposição em API."""
+        data = asdict(self)
+        data.pop("device_key", None)
+        data.pop("self_apikey", None)
+        data["has_device_key"] = bool(self.device_key)
+        data["lan_encryption_ready"] = bool(self.device_key and self.ip_address)
+        return data
 
 
 class EWeLinkGateway:
@@ -66,17 +133,19 @@ class EWeLinkGateway:
     Modo Operacional Dual-Mode: LAN/DIY First para menor latência, fallback para CoolKit API v2.
     """
 
-    def __init__(self):
+    def __init__(self, start_zeroconf: bool = True):
         self.devices: Dict[str, SonoffDevice] = {}
         self.zeroconf: Optional[Zeroconf] = None
         self.browser: Optional[ServiceBrowser] = None
+        self._long_term_memory: Any = None
         self._runtime_access_token: str = ""
         self._runtime_refresh_token: str = ""
         self._runtime_region: str = ""
         self._load_static_device_topology()
+        self._apply_env_device_keys()
 
         # Inicia descoberta ZeroConf se disponível
-        if ZEROCONF_AVAILABLE:
+        if start_zeroconf and ZEROCONF_AVAILABLE:
             try:
                 self.zeroconf = Zeroconf()
                 self.browser = ServiceBrowser(
@@ -87,6 +156,85 @@ class EWeLinkGateway:
                 logger.info("Descoberta mDNS ZeroConf Sonoff/eWeLink iniciada em segundo plano.")
             except Exception as e:
                 logger.warning(f"Não foi possível iniciar ServiceBrowser ZeroConf: {e}")
+
+    def _apply_env_device_keys(self):
+        """Aplica chaves locais configuradas via EWELINK_DEVICE_KEYS."""
+        env_keys = getattr(settings, "EWELINK_DEVICE_KEYS", {}) or {}
+        for dev_id, cfg in env_keys.items():
+            if not isinstance(cfg, dict):
+                continue
+            canonical = self.resolve_device_id(dev_id)
+            if canonical in self.devices:
+                dev = self.devices[canonical]
+                dev.ewelink_device_id = cfg.get("ewelink_device_id", dev.ewelink_device_id)
+                dev.device_key = cfg.get("device_key", dev.device_key)
+                dev.self_apikey = cfg.get("self_apikey", dev.self_apikey)
+                dev.ip_address = cfg.get("ip_address", dev.ip_address)
+                dev.is_multichannel = bool(cfg.get("is_multichannel", dev.is_multichannel))
+                dev.channel_outlet = int(cfg.get("outlet", cfg.get("channel_outlet", dev.channel_outlet)))
+
+    def attach_memory(self, long_term_memory: Any) -> None:
+        """Conecta o gateway ao SQLite local e recarrega chaves/IPs salvos para uso 100% offline."""
+        self._long_term_memory = long_term_memory
+        if not long_term_memory:
+            return
+        try:
+            saved_rows = long_term_memory.get_ewelink_devices()
+            for row in saved_rows:
+                dev_id = row["device_id"]
+                if dev_id in self.devices:
+                    dev = self.devices[dev_id]
+                    dev.ewelink_device_id = row.get("ewelink_device_id") or dev.ewelink_device_id
+                    dev.device_key = row.get("device_key") or dev.device_key
+                    dev.self_apikey = row.get("self_apikey") or dev.self_apikey
+                    dev.ip_address = row.get("ip_address") or dev.ip_address
+                    dev.port = int(row.get("port") or dev.port)
+                    dev.is_multichannel = bool(row.get("is_multichannel", dev.is_multichannel))
+                    dev.channel_outlet = int(row.get("channel_outlet", dev.channel_outlet))
+                    if row.get("last_state"):
+                        dev.last_state.update(row["last_state"])
+                else:
+                    self.devices[dev_id] = SonoffDevice(
+                        device_id=dev_id,
+                        name=row.get("name") or dev_id,
+                        device_type=row.get("device_type") or "latching_relay",
+                        group=row.get("group_name") or "Atuadores Locais",
+                        ewelink_device_id=row.get("ewelink_device_id"),
+                        device_key=row.get("device_key"),
+                        self_apikey=row.get("self_apikey") or "123",
+                        is_multichannel=bool(row.get("is_multichannel")),
+                        channel_outlet=int(row.get("channel_outlet") or 0),
+                        ip_address=row.get("ip_address"),
+                        port=int(row.get("port") or 8081),
+                        online=bool(row.get("online", True)),
+                        last_state=row.get("last_state") or {},
+                    )
+            if saved_rows:
+                logger.info(f"[SQLite] Carregados {len(saved_rows)} registros/chaves LAN eWeLink persistidos.")
+        except Exception as e:
+            logger.warning(f"Erro ao carregar registro eWeLink persistido no SQLite: {e}")
+
+    def _persist_device(self, dev: SonoffDevice) -> None:
+        if not self._long_term_memory:
+            return
+        try:
+            self._long_term_memory.upsert_ewelink_device({
+                "device_id": dev.device_id,
+                "ewelink_device_id": dev.ewelink_device_id,
+                "device_key": dev.device_key,
+                "self_apikey": dev.self_apikey,
+                "name": dev.name,
+                "device_type": dev.device_type,
+                "group_name": dev.group,
+                "ip_address": dev.ip_address,
+                "port": dev.port,
+                "is_multichannel": dev.is_multichannel,
+                "channel_outlet": dev.channel_outlet,
+                "online": dev.online,
+                "last_state": dev.last_state,
+            })
+        except Exception as e:
+            logger.warning(f"Erro ao persistir dispositivo {dev.device_id} no SQLite: {e}")
 
     def _load_static_device_topology(self):
         """Topologia oficial 'Minha Casa' com grupos e dispositivos Sonoff/eWeLink configurados."""
@@ -357,37 +505,126 @@ class EWeLinkGateway:
 
         return {"success": False, "error": "login_failed"}
 
-    def _on_service_state_change(self, zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange):
-        """Callback acionado quando um dispositivo Sonoff DIY anuncia serviço mDNS na rede."""
-        if state_change in (ServiceStateChange.Added, ServiceStateChange.Updated):
-            try:
-                info = zeroconf.get_service_info(service_type, name)
-                if info and info.addresses:
-                    ip = socket.inet_ntoa(info.addresses[0])
-                    dev_id = name.split(".")[0].lower()
-                    logger.info(f"[mDNS eWeLink] Dispositivo detectado: {dev_id} no IP {ip}:{info.port}")
+    def _decode_mdns_properties(self, properties: Dict[Any, Any]) -> Dict[str, str]:
+        decoded: Dict[str, str] = {}
+        for k, v in (properties or {}).items():
+            key_str = k.decode("utf-8", errors="ignore") if isinstance(k, bytes) else str(k)
+            val_str = v.decode("utf-8", errors="ignore") if isinstance(v, bytes) else ("" if v is None else str(v))
+            decoded[key_str] = val_str
+        return decoded
 
-                    # Atualiza ou registra
-                    if dev_id in self.devices:
-                        self.devices[dev_id].ip_address = ip
-                        self.devices[dev_id].port = info.port
-                        self.devices[dev_id].online = True
-                        self.devices[dev_id].last_seen = datetime.now().isoformat()
-                    else:
-                        self.devices[dev_id] = SonoffDevice(
-                            device_id=dev_id,
-                            name=f"Dispositivo Sonoff ({dev_id})",
-                            device_type="latching_relay",
-                            ip_address=ip,
-                            port=info.port,
-                            online=True
-                        )
-            except Exception as e:
-                logger.error(f"Erro ao processar anúncio mDNS: {e}")
+    def _find_device_by_cloud_id(self, hardware_id: str) -> Optional[SonoffDevice]:
+        clean = (hardware_id or "").lower()
+        for dev in self.devices.values():
+            if dev.ewelink_device_id and dev.ewelink_device_id.lower() == clean:
+                return dev
+            if dev.device_id.lower() == clean:
+                return dev
+        return None
+
+    def _on_service_state_change(self, zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange):
+        """
+        Callback mDNS (_ewelink._tcp.local.).
+        Atualiza IP/porta, identifica hardware por TXT 'id' ou nome e decifra registros data1..data4
+        via AES-128-CBC quando a devicekey estiver disponível.
+        """
+        if state_change not in (ServiceStateChange.Added, ServiceStateChange.Updated):
+            return
+        try:
+            info = zeroconf.get_service_info(service_type, name)
+            if not info or not info.addresses:
+                return
+
+            ip = socket.inet_ntoa(info.addresses[0])
+            props = self._decode_mdns_properties(info.properties)
+            raw_service = name.split(".")[0]
+            stripped_id = raw_service[8:] if raw_service.lower().startswith("ewelink_") else raw_service
+            hardware_id = props.get("id") or stripped_id
+
+            dev = self._find_device_by_cloud_id(hardware_id)
+            if dev is None:
+                slug = stripped_id.lower()
+                dev = SonoffDevice(
+                    device_id=slug,
+                    name=f"Dispositivo Sonoff ({hardware_id})",
+                    device_type="gate_pulse" if is_momentary_gate_device(slug) else "latching_relay",
+                    group="eWeLink LAN",
+                    model_hint=props.get("type") or "Sonoff mDNS",
+                    ewelink_device_id=hardware_id,
+                    ip_address=ip,
+                    port=info.port or 8081,
+                    online=True,
+                )
+                self.devices[slug] = dev
+
+            dev.ip_address = ip
+            dev.port = info.port or 8081
+            dev.online = True
+            dev.last_seen = datetime.now().isoformat()
+
+            # Decodifica estado embutido nos pacotes TXT mDNS (data1..data4)
+            encrypted_blob = "".join(props.get(f"data{i}", "") for i in range(1, 5))
+            if encrypted_blob:
+                is_encrypted = props.get("encrypt", "").lower() == "true" or bool(props.get("iv"))
+                if is_encrypted and props.get("iv") and dev.device_key:
+                    try:
+                        decoded_state = decrypt_lan_payload(encrypted_blob, props["iv"], dev.device_key)
+                        if isinstance(decoded_state, dict):
+                            dev.last_state.update(decoded_state)
+                            if isinstance(decoded_state.get("switches"), list):
+                                dev.is_multichannel = True
+                    except Exception as dec_err:
+                        logger.warning(f"[mDNS] Falha ao decifrar pacote de {dev.device_id}: {dec_err}")
+                elif not is_encrypted:
+                    try:
+                        decoded_state = json.loads(encrypted_blob)
+                        if isinstance(decoded_state, dict):
+                            dev.last_state.update(decoded_state)
+                    except Exception:
+                        pass
+
+            self._persist_device(dev)
+            logger.info(f"[mDNS eWeLink] {dev.device_id} ({hardware_id}) detectado em {ip}:{dev.port}")
+        except Exception as e:
+            logger.error(f"Erro ao processar anúncio mDNS: {e}")
+
+    def pair_device(
+        self,
+        target_device: str,
+        ewelink_device_id: str,
+        device_key: str,
+        self_apikey: str = "123",
+        ip_address: Optional[str] = None,
+        port: int = 8081,
+        is_multichannel: bool = False,
+        channel_outlet: int = 0,
+    ) -> Dict[str, Any]:
+        """Registra manualmente ou via API a devicekey e parâmetros LAN de um módulo eWeLink."""
+        canonical = self.resolve_device_id(target_device)
+        dev = self.devices.get(canonical)
+        if dev is None:
+            dev = SonoffDevice(
+                device_id=canonical,
+                name=canonical,
+                device_type="gate_pulse" if is_momentary_gate_device(canonical) else "latching_relay",
+            )
+            self.devices[canonical] = dev
+
+        dev.ewelink_device_id = ewelink_device_id.strip()
+        dev.device_key = device_key.strip()
+        dev.self_apikey = self_apikey.strip() or "123"
+        if ip_address:
+            dev.ip_address = ip_address.strip()
+        dev.port = port
+        dev.is_multichannel = is_multichannel
+        dev.channel_outlet = channel_outlet
+        dev.last_seen = datetime.now().isoformat()
+        self._persist_device(dev)
+        return {"success": True, "device": dev.to_public_dict()}
 
     def get_all_devices(self) -> List[Dict[str, Any]]:
-        """Retorna a lista de todos os dispositivos conhecidos e seus estados atuais."""
-        return [asdict(dev) for dev in self.devices.values()]
+        """Retorna a lista de todos os dispositivos conhecidos com segredos mascarados."""
+        return [dev.to_public_dict() for dev in self.devices.values()]
 
     def get_device(self, device_id: str) -> Optional[SonoffDevice]:
         canonical = self.resolve_device_id(device_id)
@@ -457,9 +694,12 @@ class EWeLinkGateway:
             for thing in thing_list:
                 item = thing.get("itemData", {})
                 cloud_id = item.get("deviceid")
+                device_key = item.get("devicekey")
+                self_apikey = item.get("apikey") or "123"
                 raw_name = (item.get("name") or "").strip().lower().replace(" ", "_")
                 online = bool(item.get("online", False))
                 params = item.get("params", {}) or {}
+                is_multi = isinstance(params.get("switches"), list)
 
                 # Tenta associar por ewelink_device_id ou nome normalizado
                 matched_dev = next(
@@ -471,23 +711,35 @@ class EWeLinkGateway:
 
                 if matched_dev:
                     matched_dev.ewelink_device_id = cloud_id
+                    if device_key:
+                        matched_dev.device_key = device_key
+                    if self_apikey:
+                        matched_dev.self_apikey = self_apikey
+                    if is_multi:
+                        matched_dev.is_multichannel = True
                     matched_dev.online = online
                     matched_dev.last_state.update(params)
                     matched_dev.last_seen = datetime.now().isoformat()
+                    self._persist_device(matched_dev)
                     updated += 1
                 elif cloud_id:
                     slug = raw_name or f"ewelink_{cloud_id}"
-                    self.devices[slug] = SonoffDevice(
+                    new_dev = SonoffDevice(
                         device_id=slug,
                         name=item.get("name") or slug,
                         device_type="gate_pulse" if is_momentary_gate_device(slug) else "latching_relay",
                         group="eWeLink Cloud",
                         model_hint=item.get("productModel") or "eWeLink Cloud Device",
                         ewelink_device_id=cloud_id,
+                        device_key=device_key,
+                        self_apikey=self_apikey,
+                        is_multichannel=is_multi,
                         online=online,
                         last_state=params,
-                        mode_available="cloud",
+                        mode_available="dual" if device_key else "cloud",
                     )
+                    self.devices[slug] = new_dev
+                    self._persist_device(new_dev)
                     updated += 1
 
             return {
@@ -550,14 +802,15 @@ class EWeLinkGateway:
                 "details": detail_msg,
             }
 
-        # 1. Tenta Modo Local LAN (ZeroConf / DIY Mode HTTP REST) se dispositivo estiver online na LAN
+        # 1. Tenta Modo Local LAN (AES-128-CBC ou DIY REST na porta 8081)
         if device and device.ip_address and device.online:
             lan_success, lan_details = self._send_lan_diy(device, command, params)
             if lan_success:
                 self._update_device_state(canonical_id, command, params)
+                lan_mode = "lan_encrypted_aes" if device.device_key else "lan_diy"
                 return {
                     "success": True,
-                    "mode": "lan_diy",
+                    "mode": lan_mode,
                     "target_device": canonical_id,
                     "command": command.value,
                     "params": params,
@@ -593,35 +846,60 @@ class EWeLinkGateway:
         }
 
     def _send_lan_diy(self, device: SonoffDevice, command: CommandType, params: Dict[str, Any]) -> Tuple[bool, Any]:
-        """Comunicação direta na rede local via protocolo Sonoff DIY (porta 8081)."""
-        endpoint = "pulse" if command == CommandType.PULSE else "switch"
-        url = f"http://{device.ip_address}:{device.port}/zeroconf/{endpoint}"
-
-        payload: Dict[str, Any] = {
-            "sequence": str(int(time.time() * 1000)),
-            "deviceid": device.device_id,
-            "data": {}
-        }
+        """
+        Comunicação direta na rede local via porta 8081 (/zeroconf/...).
+        Suporta tanto Sonoff DIY em texto claro quanto dispositivos eWeLink padrão
+        com criptografia AES-128-CBC (device_key) e canais múltiplos (switches).
+        """
+        is_multi = bool(device.is_multichannel or "outlet" in params)
+        outlet = int(params.get("outlet", device.channel_outlet))
 
         if command == CommandType.PULSE:
-            width = params.get("pulse_duration_ms", 1000)
-            payload["data"] = {"pulse": "on", "pulseWidth": width}
-        elif command == CommandType.POWER_ON:
-            payload["data"] = {"switch": "on"}
-        elif command == CommandType.POWER_OFF:
-            payload["data"] = {"switch": "off"}
-        elif command == CommandType.SET_STATE:
-            payload["data"] = params
+            width = int(params.get("pulse_duration_ms", params.get("pulse_ms", 1000)))
+            if is_multi:
+                endpoint = "pulses"
+                inner_data: Dict[str, Any] = {
+                    "pulses": [{"pulse": "on", "width": width, "outlet": outlet}]
+                }
+            else:
+                endpoint = "pulse"
+                inner_data = {"pulse": "on", "pulseWidth": width}
+        elif command in (CommandType.POWER_ON, CommandType.POWER_OFF):
+            switch_state = "on" if command == CommandType.POWER_ON else "off"
+            if is_multi:
+                endpoint = "switches"
+                inner_data = {"switches": [{"switch": switch_state, "outlet": outlet}]}
+            else:
+                endpoint = "switch"
+                inner_data = {"switch": switch_state}
+        else:
+            endpoint = "switches" if is_multi else "switch"
+            inner_data = dict(params)
+
+        url = f"http://{device.ip_address}:{device.port}/zeroconf/{endpoint}"
+        payload: Dict[str, Any] = {
+            "sequence": str(int(time.time() * 1000)),
+            "deviceid": device.ewelink_device_id or device.device_id,
+            "selfApikey": device.self_apikey or "123",
+        }
+
+        if device.device_key:
+            encrypted = encrypt_lan_payload(inner_data, device.device_key)
+            payload["encrypt"] = True
+            payload["iv"] = encrypted["iv"]
+            payload["data"] = encrypted["data"]
+        else:
+            payload["data"] = inner_data
 
         try:
             req = urllib.request.Request(
                 url,
-                data=json.dumps(payload).encode("utf-8"),
+                data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
                 headers={"Content-Type": "application/json"}
             )
-            with urllib.request.urlopen(req, timeout=1.2) as resp:
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                return True, data
+                return (data.get("error", 0) == 0), data
         except Exception as e:
             return False, str(e)
 

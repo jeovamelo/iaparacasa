@@ -62,7 +62,7 @@ function renderEwelinkDevices(devices) {
   const container = document.getElementById("ewelink-device-groups");
   if (!container) return;
 
-  const groupOrder = ["Atuadores Locais", "Grupo Casa", "Grupo Externa", "eWeLink Cloud"];
+  const groupOrder = ["Atuadores Locais", "Grupo Casa", "Grupo Externa", "eWeLink LAN", "eWeLink Cloud"];
   const visibleDevices = devices.filter(d => d.device_type !== "sensor");
 
   const grouped = {};
@@ -82,6 +82,9 @@ function renderEwelinkDevices(devices) {
       const statusBadge = dev.online
         ? `<span class="status-pill status-online">Online</span>`
         : `<span class="status-pill status-offline">Offline</span>`;
+      const aesBadge = dev.lan_encryption_ready
+        ? `<span class="status-pill" style="background:rgba(56,139,253,0.16);color:#79c0ff;" title="Controle local LAN AES-128-CBC pronto">🔒 AES LAN</span>`
+        : "";
       const state = dev.last_state || {};
 
       let subText = dev.model_hint || dev.device_id;
@@ -119,7 +122,7 @@ function renderEwelinkDevices(devices) {
           <div class="device-info">
             <span class="device-icon">${getDeviceIcon(dev)}</span>
             <div>
-              <strong>${escapeHtml(dev.name)}</strong>${statusBadge}
+              <strong>${escapeHtml(dev.name)}</strong>${statusBadge}${aesBadge}
               <p class="device-sub">${escapeHtml(subText)}</p>
             </div>
           </div>
