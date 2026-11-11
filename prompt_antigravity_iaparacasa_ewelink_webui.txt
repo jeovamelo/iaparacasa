@@ -1,0 +1,18 @@
+🤖 OPERAÇÃO INTEGRADA: CONTAINERIZAÇÃO LOCAL (DOCKER) + INTERFACE WEB + GATEWAY EWELINK / SONOFF
+DIRETÓRIO DO PROJETO: C:\Users\jeova\.gemini\antigravity-ide\brain\iaparacasa\iaparacasa
+
+🎯 OBJETIVO: 
+1. Construir e rodar a solução de automação residencial com Edge AI localmente em container Docker sem depender de Python instalado no host Windows.
+2. Criar uma interface web leve, moderna e responsiva (Dashboard + Chat em linguagem natural + Controle manual de dispositivos + Auditoria de aprendizado contínuo).
+3. Implementar o conector/gateway com a plataforma eWeLink (Sonoff) suportando tanto Modo Nuvem (API oficial CoolKit via ewelink-api/python) quanto Modo Local LAN/DIY (ZeroConf/mDNS para baixa latência e segurança física de relés/portões).
+
+---
+
+### 📦 1. AJUSTES DE CONTAINERIZAÇÃO E DOCKER (LOCAL)
+Como o host local não possui Python/UV configurados no PATH, todo o ciclo deve ocorrer 100% isolado via Docker.
+
+1. Atualizar requirements.txt com dependências de Web UI (jinja2, python-multipart), eWeLink (aiohttp, zeroconf, requests) e MQTT (paho-mqtt).
+2. Assegurar Dockerfile multi-stage otimizado e docker-compose.yml com volumes mapeados e healthcheck.
+3. Servir a Web UI diretamente via FastAPI (/ e /dashboard).
+4. Implementar ewelink_gateway.py com descoberta mDNS/ZeroConf local e fallback de nuvem CoolKit.
+

@@ -1,0 +1,48 @@
+services:
+  iaparacasa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: iaparacasa-edge
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Monta pesos de modelos e banco SQLite persistente no host
+      - ./models:/app/models
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - MODEL_PATH=/app/models/qwen2.5-1.5b-instruct-q4_k_m.gguf
+      - MODEL_REPO_ID=Qwen/Qwen2.5-1.5B-Instruct-GGUF
+      - MODEL_FILENAME=qwen2.5-1.5b-instruct-q4_k_m.gguf
+      - N_CTX=2048
+      - N_THREADS=4
+      - N_BATCH=256
+      - USE_MMAP=false
+      - TEMPERATURE=0.1
+      - DB_PATH=/app/data/iaparacasa_memory.db
+      - SYSTEM_PROMPT_PATH=/app/system_prompt.txt
+      - USE_MOCK_ENGINE=false
+      - LOG_LEVEL=info
+    # Restrição estrita de recursos para garantir operação abaixo de 2.5GB de RAM
+    deploy:
+      resources:
+        limits:
+          memory: 2500M
+          cpus: "4.0"
+        reservations:
+          memory: 1000M
+
+  # Gateway MQTT Local Opcional para integração Sonoff / Tasmota / Home Assistant
+  mqtt-broker:
+    image: eclipse-mosquitto:2
+    container_name: iaparacasa-mqtt
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./data/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    profiles:
+      - with-mqtt

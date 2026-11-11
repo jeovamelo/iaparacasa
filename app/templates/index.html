@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iaparacasa - Edge AI Home Intelligence</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
+</head>
+<body>
+  <!-- Header / Barra Superior de Status -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-icon">🏠</div>
+      <div>
+        <h1 class="logo-title">iaparacasa</h1>
+        <p class="logo-subtitle">Edge AI Home Automation &bull; Mini PC / VPS</p>
+      </div>
+    </div>
+    <div class="header-status">
+      <span class="badge badge-success" id="badge-status">● Sistema Operacional</span>
+      <span class="badge badge-info" id="badge-engine">🧠 Engine: Conectando...</span>
+      <span class="badge badge-warning" id="badge-ram">💾 RAM: -- MB</span>
+      <span class="badge badge-purple" id="badge-ewelink">⚡ eWeLink LAN Dual-Mode</span>
+    </div>
+  </header>
+
+  <!-- Container Principal em Grid -->
+  <main class="dashboard-grid">
+    <!-- Coluna Esquerda: Telemetria e Controles Manuais -->
+    <section class="panel-left">
+      <!-- Cards de Sensores -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">📡 Sensores em Tempo Real (Telemetria)</span>
+          <button class="btn-refresh" onclick="updateDashboard()" title="Atualizar dados">&#x21bb;</button>
+        </div>
+        <div class="telemetry-grid">
+          <div class="sensor-box" id="sensor-temp-box">
+            <div class="sensor-icon">🌡️</div>
+            <div class="sensor-value" id="val-temp">--.- °C</div>
+            <div class="sensor-label">Temperatura Sala</div>
+            <div class="sensor-sub" id="val-hum">Umidade: --%</div>
+          </div>
+          <div class="sensor-box" id="sensor-motion-box">
+            <div class="sensor-icon">🚶</div>
+            <div class="sensor-value" id="val-motion">Ausente</div>
+            <div class="sensor-label">Presença na Sala</div>
+            <div class="sensor-sub" id="val-motion-time">Aguardando leitura</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controle Manual de Dispositivos eWeLink / Sonoff (Minha Casa) -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🔌 Dispositivos eWeLink (Minha Casa)</span>
+          <button class="btn-sync" onclick="syncEwelinkDevices()" id="btn-sync" title="Sincronizar com CoolKit API v2 / LAN">&#x21bb; Sincronizar</button>
+        </div>
+        <p class="card-desc" id="sync-status-text">Dual-Mode: LAN First / Fallback eWeLink Cloud API v2</p>
+        <div class="device-controls" id="ewelink-device-groups">
+          <div class="empty-state">Carregando dispositivos Sonoff / eWeLink...</div>
+        </div>
+      </div>
+
+      <!-- Simulador de Telemetria Rápida para Testes -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🧪 Injetor de Telemetria para Teste</span>
+        </div>
+        <div class="sim-controls">
+          <button class="btn btn-secondary" onclick="simulateTelemetry(29.5, 1)">🔥 Calor Intenso (29.5°C + Presença)</button>
+          <button class="btn btn-secondary" onclick="simulateTelemetry(21.0, 0)">❄️ Agradável (21.0°C + Vazio)</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Coluna Central/Direita: Chat Natural, Decisão JSON e Auditoria de Memória -->
+    <section class="panel-right">
+      <!-- Chat com Edge LLM -->
+      <div class="card chat-card">
+        <div class="card-header">
+          <span class="card-title">💬 Assistente Doméstico (Linguagem Natural)</span>
+          <span class="chat-hint">In-Context Learning Ativo</span>
+        </div>
+
+        <!-- Atalhos de Comandos Rápidos -->
+        <div class="quick-prompts">
+          <span class="quick-title">Sugestões:</span>
+          <button class="chip" onclick="sendPrompt('Abra o portão da garagem por favor')">🚪 Portão Garagem</button>
+          <button class="chip" onclick="sendPrompt('Está muito calor na sala, liga o ar condicionado')">❄️ Ar Sala</button>
+          <button class="chip" onclick="sendPrompt('Ligue a luz da sala')">💡 Luz Sala</button>
+          <button class="chip" onclick="sendPrompt('Acenda o jardim deck e jardim principal')">🌿 Jardim Deck</button>
+          <button class="chip" onclick="sendPrompt('Ligue o jardim da garagem')">🏮 Jardim Garagem</button>
+          <button class="chip" onclick="sendPrompt('Ligue o corredor de cima')">🪜 Corredor Cima</button>
+        </div>
+
+        <!-- Área de Histórico de Mensagens -->
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-bubble bubble-assistant">
+            <div class="bubble-header">
+              <strong>🤖 iaparacasa</strong>
+              <span class="bubble-time">Agora</span>
+            </div>
+            <div class="bubble-content">
+              Olá! Sou o cérebro da sua casa inteligente. Como posso ajudar com os atuadores, portão ou climatização hoje?
+            </div>
+          </div>
+        </div>
+
+        <!-- Input de Envio de Mensagem -->
+        <form class="chat-input-bar" onsubmit="event.preventDefault(); submitChat();">
+          <input type="text" id="chat-input" placeholder="Digite uma instrução (ex: 'abra o portão', 'está calor', 'prefiro o ar em 22C')..." autocomplete="off" required />
+          <button type="submit" class="btn btn-primary" id="btn-send">Enviar</button>
+        </form>
+      </div>
+
+      <!-- Memória de Longo Prazo e Hábitos Aprendidos (Auditoria) -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🧠 Memória Semântica &amp; Hábitos Aprendidos (SQLite)</span>
+          <span class="badge badge-success" id="count-prefs">3 Hábitos</span>
+        </div>
+        <p class="card-desc">
+          Padrões e regras aprendidas ao longo do tempo através dos seus comandos e feedbacks (sem necessidade de retreinamento do modelo).
+        </p>
+        <div class="preferences-list" id="preferences-list">
+          <!-- Renderizado via JS -->
+          <div class="empty-state">Carregando preferências locais...</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal de Feedback e Correção de Hábito -->
+  <div class="modal-overlay" id="feedback-modal" style="display: none;">
+    <div class="modal-box">
+      <h3>🛠️ Corrigir Decisão e Ensinar Hábito</h3>
+      <p class="modal-desc">
+        Explique como você prefere que o sistema aja nessa situação. A inteligência aprenderá esta regra imediatamente na memória de longo prazo.
+      </p>
+      <input type="hidden" id="modal-interaction-id" />
+      <div class="form-group">
+        <label for="modal-correction">O que você gostaria que tivesse sido feito?</label>
+        <textarea id="modal-correction" rows="3" placeholder="Ex: Quando passar de 28°C prefiro o ar em 21°C e não em 23°C..."></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeFeedbackModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="submitCorrection()">Salvar Novo Hábito</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
