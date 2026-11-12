@@ -26,6 +26,9 @@ services:
       - SYSTEM_PROMPT_PATH=/app/system_prompt.txt
       - USE_MOCK_ENGINE=false
       - LOG_LEVEL=info
+      - MQTT_ENABLED=${MQTT_ENABLED:-true}
+      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST:-mqtt-broker}
+      - MQTT_BROKER_PORT=${MQTT_BROKER_PORT:-1883}
     # Restrição estrita de recursos para garantir operação abaixo de 2.5GB de RAM
     deploy:
       resources:
@@ -35,7 +38,7 @@ services:
         reservations:
           memory: 1000M
 
-  # Gateway MQTT Local Opcional para integração Sonoff / Tasmota / Home Assistant
+  # Gateway MQTT Local para integração Tasmota / ESPHome / Home Assistant
   mqtt-broker:
     image: eclipse-mosquitto:2
     container_name: iaparacasa-mqtt
@@ -44,5 +47,3 @@ services:
       - "1883:1883"
     volumes:
       - ./data/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-    profiles:
-      - with-mqtt

@@ -10,6 +10,7 @@ import urllib.error
 from typing import Any, Dict, Optional
 
 from app.config import settings
+from app.mqtt_gateway import mqtt_gateway
 from app.schemas import ActionType, CommandType, DecisionOutput
 
 logger = logging.getLogger("iaparacasa.bridge")
@@ -69,12 +70,19 @@ class HardwareBridge:
             ha_res = self._send_ha_webhook(self.ha_webhook, payload)
             results["channels"].append({"channel": "home_assistant_webhook", "result": ha_res})
 
-        # 3. Formato MQTT padronizado (para consumo por bridges locais)
-        mqtt_topic = f"iaparacasa/{decision.target_device}/cmd"
-        results["mqtt"] = {
+        # 3. Formato e publicação MQTT padronizada (Tasmota / ESPHome / Home Assistant)
+        topic_prefix = getattr(settings, "MQTT_TOPIC_PREFIX", "iaparacasa").strip("/")
+        mqtt_topic = f"{topic_prefix}/{decision.target_device}/cmd"
+        mqtt_info: Dict[str, Any] = {
             "topic": mqtt_topic,
-            "payload": payload
+            "payload": payload,
+            "published": False,
         }
+        if self.enabled and mqtt_gateway.is_connected():
+            ok, mqtt_res = mqtt_gateway.publish_json(decision.target_device, payload)
+            mqtt_info["published"] = ok
+            results["channels"].append({"channel": "mqtt", "result": mqtt_res})
+        results["mqtt"] = mqtt_info
 
         return results
 

@@ -21,6 +21,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
+from app.mqtt_gateway import (
+    OPEN_FIRMWARE_TYPES,
+    build_tasmota_command,
+    mqtt_gateway,
+    send_esphome_http,
+    send_tasmota_http,
+)
 from app.schemas import ActionType, CommandType, DecisionOutput, is_momentary_gate_device
 
 logger = logging.getLogger("iaparacasa.ewelink")
@@ -115,7 +122,11 @@ class SonoffDevice:
     online: bool = True
     last_state: Dict[str, Any] = field(default_factory=dict)
     last_seen: str = field(default_factory=lambda: datetime.now().isoformat())
-    mode_available: str = "dual"  # 'lan', 'cloud', 'dual'
+    mode_available: str = "dual"  # 'lan', 'cloud', 'dual', 'mqtt', 'open_firmware'
+    firmware_type: str = "ewelink"  # 'ewelink', 'tasmota', 'esphome', 'mqtt_json'
+    mqtt_topic: Optional[str] = None
+    entity_domain: str = "switch"
+    entity_id: Optional[str] = None
 
     def to_public_dict(self) -> Dict[str, Any]:
         """Serializa o dispositivo mascarando segredos criptográficos para exposição em API."""
@@ -124,6 +135,7 @@ class SonoffDevice:
         data.pop("self_apikey", None)
         data["has_device_key"] = bool(self.device_key)
         data["lan_encryption_ready"] = bool(self.device_key and self.ip_address)
+        data["open_firmware_ready"] = self.firmware_type in OPEN_FIRMWARE_TYPES
         return data
 
 
@@ -143,6 +155,7 @@ class EWeLinkGateway:
         self._runtime_region: str = ""
         self._load_static_device_topology()
         self._apply_env_device_keys()
+        self._apply_open_firmware_env_map()
 
         # Inicia descoberta ZeroConf se disponível
         if start_zeroconf and ZEROCONF_AVAILABLE:
@@ -173,8 +186,36 @@ class EWeLinkGateway:
                 dev.is_multichannel = bool(cfg.get("is_multichannel", dev.is_multichannel))
                 dev.channel_outlet = int(cfg.get("outlet", cfg.get("channel_outlet", dev.channel_outlet)))
 
+    def _apply_open_firmware_env_map(self):
+        """Aplica mapeamentos Tasmota/ESPHome/MQTT configurados via OPEN_FIRMWARE_DEVICE_MAP."""
+        env_map = getattr(settings, "OPEN_FIRMWARE_DEVICE_MAP", {}) or {}
+        for dev_id, cfg in env_map.items():
+            if not isinstance(cfg, dict):
+                continue
+            canonical = self.resolve_device_id(dev_id)
+            if canonical not in self.devices:
+                self.devices[canonical] = SonoffDevice(
+                    device_id=canonical,
+                    name=cfg.get("name") or canonical,
+                    device_type="gate_pulse" if is_momentary_gate_device(canonical) else "latching_relay",
+                    group=cfg.get("group") or "Tasmota / ESPHome",
+                )
+            dev = self.devices[canonical]
+            dev.firmware_type = str(cfg.get("firmware_type", "tasmota")).lower()
+            dev.mqtt_topic = cfg.get("mqtt_topic") or canonical
+            if cfg.get("ip_address"):
+                dev.ip_address = cfg["ip_address"]
+            if "port" in cfg:
+                dev.port = int(cfg["port"])
+            elif dev.firmware_type in ("tasmota", "esphome"):
+                dev.port = 80
+            dev.is_multichannel = bool(cfg.get("is_multichannel", dev.is_multichannel))
+            dev.channel_outlet = int(cfg.get("outlet", cfg.get("channel_outlet", dev.channel_outlet)))
+            dev.entity_domain = str(cfg.get("entity_domain", dev.entity_domain or "switch"))
+            dev.entity_id = cfg.get("entity_id") or canonical
+
     def attach_memory(self, long_term_memory: Any) -> None:
-        """Conecta o gateway ao SQLite local e recarrega chaves/IPs salvos para uso 100% offline."""
+        """Conecta o gateway ao SQLite local e recarrega chaves/IPs e firmwares abertos salvos."""
         self._long_term_memory = long_term_memory
         if not long_term_memory:
             return
@@ -191,9 +232,21 @@ class EWeLinkGateway:
                     dev.port = int(row.get("port") or dev.port)
                     dev.is_multichannel = bool(row.get("is_multichannel", dev.is_multichannel))
                     dev.channel_outlet = int(row.get("channel_outlet", dev.channel_outlet))
+                    if row.get("firmware_type"):
+                        dev.firmware_type = row["firmware_type"]
+                    if row.get("mqtt_topic"):
+                        dev.mqtt_topic = row["mqtt_topic"]
+                    if row.get("entity_domain"):
+                        dev.entity_domain = row["entity_domain"]
+                    if row.get("entity_id"):
+                        dev.entity_id = row["entity_id"]
+                    if dev.firmware_type in OPEN_FIRMWARE_TYPES:
+                        dev.online = bool(row.get("online", True))
+                        dev.mode_available = "mqtt"
                     if row.get("last_state"):
                         dev.last_state.update(row["last_state"])
                 else:
+                    fw_type = row.get("firmware_type") or "ewelink"
                     self.devices[dev_id] = SonoffDevice(
                         device_id=dev_id,
                         name=row.get("name") or dev_id,
@@ -205,14 +258,19 @@ class EWeLinkGateway:
                         is_multichannel=bool(row.get("is_multichannel")),
                         channel_outlet=int(row.get("channel_outlet") or 0),
                         ip_address=row.get("ip_address"),
-                        port=int(row.get("port") or 8081),
+                        port=int(row.get("port") or (80 if fw_type in ("tasmota", "esphome") else 8081)),
                         online=bool(row.get("online", True)),
                         last_state=row.get("last_state") or {},
+                        firmware_type=fw_type,
+                        mqtt_topic=row.get("mqtt_topic"),
+                        entity_domain=row.get("entity_domain") or "switch",
+                        entity_id=row.get("entity_id"),
+                        mode_available="mqtt" if fw_type in OPEN_FIRMWARE_TYPES else "dual",
                     )
             if saved_rows:
-                logger.info(f"[SQLite] Carregados {len(saved_rows)} registros/chaves LAN eWeLink persistidos.")
+                logger.info(f"[SQLite] Carregados {len(saved_rows)} registros/chaves LAN e MQTT persistidos.")
         except Exception as e:
-            logger.warning(f"Erro ao carregar registro eWeLink persistido no SQLite: {e}")
+            logger.warning(f"Erro ao carregar registro eWeLink/MQTT persistido no SQLite: {e}")
 
     def _persist_device(self, dev: SonoffDevice) -> None:
         if not self._long_term_memory:
@@ -232,6 +290,10 @@ class EWeLinkGateway:
                 "channel_outlet": dev.channel_outlet,
                 "online": dev.online,
                 "last_state": dev.last_state,
+                "firmware_type": dev.firmware_type,
+                "mqtt_topic": dev.mqtt_topic,
+                "entity_domain": dev.entity_domain,
+                "entity_id": dev.entity_id,
             })
         except Exception as e:
             logger.warning(f"Erro ao persistir dispositivo {dev.device_id} no SQLite: {e}")
@@ -622,6 +684,145 @@ class EWeLinkGateway:
         self._persist_device(dev)
         return {"success": True, "device": dev.to_public_dict()}
 
+    def pair_open_firmware_device(
+        self,
+        target_device: str,
+        firmware_type: str = "tasmota",
+        mqtt_topic: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        port: int = 80,
+        is_multichannel: bool = False,
+        channel_outlet: int = 0,
+        entity_domain: str = "switch",
+        entity_id: Optional[str] = None,
+        name: Optional[str] = None,
+        group: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Configura e persiste dispositivo com firmware aberto (Tasmota, ESPHome ou MQTT JSON)."""
+        canonical = self.resolve_device_id(target_device)
+        fw_clean = (firmware_type or "tasmota").strip().lower()
+        dev = self.devices.get(canonical)
+        if dev is None:
+            dev = SonoffDevice(
+                device_id=canonical,
+                name=name or canonical,
+                device_type="gate_pulse" if is_momentary_gate_device(canonical) else "latching_relay",
+                group=group or "Tasmota / ESPHome",
+                model_hint=f"{fw_clean.upper()} MQTT",
+            )
+            self.devices[canonical] = dev
+
+        if name:
+            dev.name = name.strip()
+        if group:
+            dev.group = group.strip()
+        dev.firmware_type = fw_clean
+        dev.mqtt_topic = (mqtt_topic or canonical).strip()
+        if ip_address is not None:
+            dev.ip_address = ip_address.strip() or None
+        dev.port = int(port or (80 if fw_clean in ("tasmota", "esphome") else 8081))
+        dev.is_multichannel = bool(is_multichannel)
+        dev.channel_outlet = int(channel_outlet or 0)
+        dev.entity_domain = (entity_domain or "switch").strip().lower()
+        dev.entity_id = (entity_id or canonical).strip()
+        dev.online = True
+        dev.mode_available = "mqtt" if fw_clean in OPEN_FIRMWARE_TYPES else "dual"
+        if fw_clean in ("tasmota", "esphome", "mqtt_json"):
+            dev.model_hint = f"{fw_clean.upper()} Local ({dev.mqtt_topic})"
+        dev.last_seen = datetime.now().isoformat()
+        self._persist_device(dev)
+        return {
+            "success": True,
+            "device": dev.to_public_dict(),
+            "hardware_bridge_enabled": bool(settings.ENABLE_HARDWARE_BRIDGE),
+            "mqtt_connected": mqtt_gateway.is_connected(),
+        }
+
+    def resolve_device_by_mqtt_topic(self, topic_segment: str) -> Optional[str]:
+        """Mapeia um tópico MQTT (ex: tasmota_AB12 ou luz_sala) para o device_id canônico."""
+        clean = (topic_segment or "").strip().lower()
+        for dev in self.devices.values():
+            if dev.mqtt_topic and dev.mqtt_topic.strip().lower() == clean:
+                return dev.device_id
+        candidate = self.resolve_device_id(clean)
+        if candidate in self.devices:
+            return candidate
+        return candidate
+
+    def handle_mqtt_device_update(self, device_id: str, patch: Dict[str, Any]) -> None:
+        """Atualiza estado em tempo real recebido via assinatura MQTT (LWT / POWER / state)."""
+        canonical = self.resolve_device_id(device_id)
+        dev = self.devices.get(canonical)
+        if dev is None:
+            dev = SonoffDevice(
+                device_id=canonical,
+                name=canonical,
+                device_type="gate_pulse" if is_momentary_gate_device(canonical) else "latching_relay",
+                group="Tasmota / ESPHome",
+                model_hint="MQTT Descoberto",
+                firmware_type="tasmota",
+                mqtt_topic=patch.get("mqtt_topic") or canonical,
+                port=80,
+                mode_available="mqtt",
+            )
+            self.devices[canonical] = dev
+
+        if "online" in patch:
+            dev.online = bool(patch["online"])
+        if patch.get("mqtt_topic") and not dev.mqtt_topic:
+            dev.mqtt_topic = patch["mqtt_topic"]
+        if isinstance(patch.get("last_state"), dict):
+            dev.last_state.update(patch["last_state"])
+        dev.last_seen = datetime.now().isoformat()
+        if dev.firmware_type in OPEN_FIRMWARE_TYPES:
+            self._persist_device(dev)
+
+    def handle_tasmota_discovery(self, cfg: Dict[str, Any]) -> None:
+        """Processa anúncio automático tasmota/discovery/<mac>/config."""
+        topic = str(cfg.get("t") or "").strip()
+        ip = str(cfg.get("ip") or "").strip()
+        hostname = str(cfg.get("hn") or "").strip()
+        fn_list = cfg.get("fn") or []
+        friendly = next((str(x) for x in fn_list if x), "") or str(cfg.get("dn") or "") or topic or hostname
+        if not topic and not hostname:
+            return
+
+        candidate = self.resolve_device_by_mqtt_topic(topic or hostname) or self.resolve_device_id(friendly)
+        relays = [x for x in (cfg.get("rl") or []) if isinstance(x, int) and x > 0]
+        is_multi = len(relays) > 1
+
+        dev = self.devices.get(candidate)
+        if dev is None:
+            dev = SonoffDevice(
+                device_id=candidate,
+                name=friendly,
+                device_type="gate_pulse" if is_momentary_gate_device(candidate) else "latching_relay",
+                group="Tasmota MQTT",
+                model_hint=f"TASMOTA Local ({topic})",
+                firmware_type="tasmota",
+                mqtt_topic=topic,
+                ip_address=ip or None,
+                port=80,
+                is_multichannel=is_multi,
+                online=True,
+                mode_available="mqtt",
+            )
+            self.devices[candidate] = dev
+        else:
+            dev.firmware_type = "tasmota"
+            dev.mqtt_topic = topic or dev.mqtt_topic
+            if ip:
+                dev.ip_address = ip
+            dev.port = 80
+            dev.online = True
+            dev.mode_available = "mqtt"
+            if is_multi:
+                dev.is_multichannel = True
+
+        dev.last_seen = datetime.now().isoformat()
+        self._persist_device(dev)
+        logger.info(f"[Tasmota Discovery] '{dev.device_id}' associado ao tópico '{dev.mqtt_topic}' ({ip}).")
+
     def get_all_devices(self) -> List[Dict[str, Any]]:
         """Retorna a lista de todos os dispositivos conhecidos com segredos mascarados."""
         return [dev.to_public_dict() for dev in self.devices.values()]
@@ -802,6 +1003,10 @@ class EWeLinkGateway:
                 "details": detail_msg,
             }
 
+        # 0. Rota prioritária para Firmware Aberto (Tasmota / ESPHome / MQTT JSON 100% local)
+        if device and device.firmware_type in OPEN_FIRMWARE_TYPES:
+            return self._dispatch_open_firmware(device, command, params)
+
         # 1. Tenta Modo Local LAN (AES-128-CBC ou DIY REST na porta 8081)
         if device and device.ip_address and device.online:
             lan_success, lan_details = self._send_lan_diy(device, command, params)
@@ -843,6 +1048,102 @@ class EWeLinkGateway:
             "params": params,
             "offline_warning": is_offline,
             "details": "Rotas físicas indisponíveis; comando registrado no controlador local."
+        }
+
+    def _dispatch_open_firmware(
+        self,
+        device: SonoffDevice,
+        command: CommandType,
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Despacha comando local para Tasmota (MQTT + fallback HTTP), ESPHome ou JSON MQTT."""
+        fw_type = device.firmware_type
+        topic = device.mqtt_topic or device.device_id
+        http_port = device.port if (device.port and device.port != 8081) else 80
+        domain = device.entity_domain or "switch"
+        entity_id = device.entity_id or device.device_id
+        attempts: List[Tuple[str, Any]] = []
+
+        if fw_type == "tasmota":
+            if mqtt_gateway.is_connected():
+                attempts.append((
+                    "mqtt_tasmota",
+                    lambda: mqtt_gateway.publish_tasmota(
+                        mqtt_topic=topic,
+                        command=command,
+                        params=params,
+                        is_multichannel=device.is_multichannel,
+                        channel_outlet=device.channel_outlet,
+                    ),
+                ))
+            if device.ip_address:
+                cmnd, cmnd_payload = build_tasmota_command(
+                    command=command,
+                    params=params,
+                    is_multichannel=device.is_multichannel,
+                    channel_outlet=device.channel_outlet,
+                )
+                attempts.append((
+                    "tasmota_http",
+                    lambda: send_tasmota_http(device.ip_address, cmnd, cmnd_payload, port=http_port),
+                ))
+        elif fw_type == "esphome":
+            if mqtt_gateway.is_connected():
+                attempts.append((
+                    "mqtt_esphome",
+                    lambda: mqtt_gateway.publish_esphome(
+                        mqtt_topic=topic,
+                        command=command,
+                        params=params,
+                        entity_domain=domain,
+                        entity_id=entity_id,
+                    ),
+                ))
+            if device.ip_address:
+                attempts.append((
+                    "esphome_http",
+                    lambda: send_esphome_http(
+                        ip_address=device.ip_address,
+                        command=command,
+                        params=params,
+                        entity_domain=domain,
+                        entity_id=entity_id,
+                        port=http_port,
+                    ),
+                ))
+        elif fw_type == "mqtt_json":
+            payload_dict = {
+                "device": device.device_id,
+                "cmd": command.value,
+                "params": params,
+                "switch": "on" if command == CommandType.POWER_ON else ("off" if command == CommandType.POWER_OFF else None),
+            }
+            attempts.append(("mqtt_json", lambda: mqtt_gateway.publish_json(topic, payload_dict)))
+
+        errors: List[str] = []
+        for mode_name, sender in attempts:
+            ok, details = sender()
+            if ok:
+                self._update_device_state(device.device_id, command, params)
+                self._persist_device(device)
+                return {
+                    "success": True,
+                    "mode": mode_name,
+                    "target_device": device.device_id,
+                    "command": command.value,
+                    "params": params,
+                    "details": details,
+                }
+            errors.append(f"{mode_name}: {details}")
+
+        return {
+            "success": False,
+            "mode": f"{fw_type}_unreachable",
+            "target_device": device.device_id,
+            "command": command.value,
+            "params": params,
+            "offline_warning": True,
+            "details": "; ".join(errors) or "Broker MQTT desconectado e IP HTTP não configurado.",
         }
 
     def _send_lan_diy(self, device: SonoffDevice, command: CommandType, params: Dict[str, Any]) -> Tuple[bool, Any]:

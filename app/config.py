@@ -130,8 +130,38 @@ class Settings(BaseSettings):
         default="",
         description="URL de webhook do Home Assistant para despacho de eventos"
     )
-    MQTT_BROKER_HOST: str = "localhost"
-    MQTT_BROKER_PORT: int = 1883
+    MQTT_ENABLED: bool = Field(
+        default=False,
+        description="Ativa cliente MQTT persistente para Tasmota, ESPHome e atuadores/sensores locais"
+    )
+    MQTT_BROKER_HOST: str = Field(
+        default="localhost",
+        description="Host do broker MQTT (ex: 'mqtt-broker' no Docker Compose ou IP da LAN)"
+    )
+    MQTT_BROKER_PORT: int = Field(
+        default=1883,
+        description="Porta TCP do broker MQTT (padrão 1883)"
+    )
+    MQTT_USERNAME: str = Field(
+        default="",
+        description="Usuário opcional para autenticação no broker MQTT"
+    )
+    MQTT_PASSWORD: str = Field(
+        default="",
+        description="Senha opcional para autenticação no broker MQTT"
+    )
+    MQTT_CLIENT_ID: str = Field(
+        default="iaparacasa-edge",
+        description="Identificador do cliente MQTT do iaparacasa"
+    )
+    MQTT_TOPIC_PREFIX: str = Field(
+        default="iaparacasa",
+        description="Prefixo padrão para tópicos JSON MQTT do iaparacasa"
+    )
+    OPEN_FIRMWARE_DEVICE_MAP: dict = Field(
+        default_factory=dict,
+        description="Mapeamento opcional de dispositivos com firmware aberto (device_id -> {firmware_type, mqtt_topic, ip_address, is_multichannel, channel_outlet, entity_domain, entity_id})"
+    )
     SONOFF_DEVICE_MAP: dict = Field(
         default_factory=lambda: {
             "varanda_superior": "192.168.1.140",

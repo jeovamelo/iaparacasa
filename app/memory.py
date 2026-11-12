@@ -165,7 +165,7 @@ class LongTermMemory:
             );
             """)
 
-            # Registro persistente de dispositivos eWeLink e chaves LAN AES (devicekey)
+            # Registro persistente de dispositivos eWeLink, Tasmota, ESPHome e MQTT
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS ewelink_device_registry (
                 device_id TEXT PRIMARY KEY,
@@ -181,9 +181,26 @@ class LongTermMemory:
                 channel_outlet INTEGER DEFAULT 0,
                 online INTEGER DEFAULT 1,
                 last_state TEXT DEFAULT '{}',
+                firmware_type TEXT DEFAULT 'ewelink',
+                mqtt_topic TEXT,
+                entity_domain TEXT DEFAULT 'switch',
+                entity_id TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """)
+
+            # Migração idempotente para bancos SQLite existentes
+            cursor.execute("PRAGMA table_info(ewelink_device_registry)")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            migrations = {
+                "firmware_type": "TEXT DEFAULT 'ewelink'",
+                "mqtt_topic": "TEXT",
+                "entity_domain": "TEXT DEFAULT 'switch'",
+                "entity_id": "TEXT",
+            }
+            for col_name, col_def in migrations.items():
+                if col_name not in existing_cols:
+                    cursor.execute(f"ALTER TABLE ewelink_device_registry ADD COLUMN {col_name} {col_def}")
 
             conn.commit()
 
@@ -449,7 +466,7 @@ class LongTermMemory:
         return top_results
 
     def upsert_ewelink_device(self, device: Dict[str, Any]) -> None:
-        """Persiste ou atualiza metadados e chaves locais AES (devicekey) de dispositivos eWeLink."""
+        """Persiste ou atualiza metadados, chaves LAN AES e configuração MQTT/Tasmota/ESPHome."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -457,9 +474,10 @@ class LongTermMemory:
                 INSERT INTO ewelink_device_registry (
                     device_id, ewelink_device_id, device_key, self_apikey, name,
                     device_type, group_name, ip_address, port, is_multichannel,
-                    channel_outlet, online, last_state, updated_at
+                    channel_outlet, online, last_state,
+                    firmware_type, mqtt_topic, entity_domain, entity_id, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(device_id) DO UPDATE SET
                     ewelink_device_id = COALESCE(excluded.ewelink_device_id, ewelink_device_registry.ewelink_device_id),
                     device_key = COALESCE(excluded.device_key, ewelink_device_registry.device_key),
@@ -473,6 +491,10 @@ class LongTermMemory:
                     channel_outlet = excluded.channel_outlet,
                     online = excluded.online,
                     last_state = excluded.last_state,
+                    firmware_type = COALESCE(excluded.firmware_type, ewelink_device_registry.firmware_type),
+                    mqtt_topic = COALESCE(excluded.mqtt_topic, ewelink_device_registry.mqtt_topic),
+                    entity_domain = COALESCE(excluded.entity_domain, ewelink_device_registry.entity_domain),
+                    entity_id = COALESCE(excluded.entity_id, ewelink_device_registry.entity_id),
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -489,6 +511,10 @@ class LongTermMemory:
                     int(device.get("channel_outlet", 0)),
                     1 if device.get("online", True) else 0,
                     json.dumps(device.get("last_state") or {}),
+                    device.get("firmware_type", "ewelink"),
+                    device.get("mqtt_topic"),
+                    device.get("entity_domain", "switch"),
+                    device.get("entity_id"),
                 ),
             )
             conn.commit()

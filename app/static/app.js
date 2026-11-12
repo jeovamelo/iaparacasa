@@ -3,6 +3,7 @@
    ============================================================================== */
 
 let currentAcTemp = 23;
+let cachedDevices = [];
 
 // Inicialização
 document.addEventListener("DOMContentLoaded", () => {
@@ -40,10 +41,30 @@ async function updateDashboard() {
         document.getElementById("val-motion-time").innerText = isMotion ? "Movimento recente" : "Nenhum movimento";
       }
     }
-    // 3. Atualiza Dispositivos eWeLink (Minha Casa) agrupados
+    // 3. Atualiza Status MQTT / Firmware Aberto
+    const mqttRes = await fetch("/mqtt/status");
+    if (mqttRes.ok) {
+      const m = await mqttRes.json();
+      const mqttBadge = document.getElementById("badge-mqtt");
+      if (mqttBadge) {
+        if (!m.enabled) {
+          mqttBadge.innerText = "📡 MQTT: Desativado";
+          mqttBadge.className = "badge badge-warning";
+        } else if (m.connected) {
+          mqttBadge.innerText = `📡 MQTT: Online (${m.open_firmware_devices_count || 0} OpenFW)`;
+          mqttBadge.className = "badge badge-success";
+        } else {
+          mqttBadge.innerText = `📡 MQTT: Aguardando ${m.broker_host}:${m.broker_port}`;
+          mqttBadge.className = "badge badge-warning";
+        }
+      }
+    }
+
+    // 4. Atualiza Dispositivos (Minha Casa) agrupados
     const devsRes = await fetch("/ewelink/devices");
     if (devsRes.ok) {
       const devices = await devsRes.json();
+      cachedDevices = devices;
       renderEwelinkDevices(devices);
     }
   } catch (err) {
@@ -62,7 +83,15 @@ function renderEwelinkDevices(devices) {
   const container = document.getElementById("ewelink-device-groups");
   if (!container) return;
 
-  const groupOrder = ["Atuadores Locais", "Grupo Casa", "Grupo Externa", "eWeLink LAN", "eWeLink Cloud"];
+  const groupOrder = [
+    "Atuadores Locais",
+    "Grupo Casa",
+    "Grupo Externa",
+    "Tasmota / ESPHome",
+    "Tasmota MQTT",
+    "eWeLink LAN",
+    "eWeLink Cloud",
+  ];
   const visibleDevices = devices.filter(d => d.device_type !== "sensor");
 
   const grouped = {};
@@ -85,6 +114,14 @@ function renderEwelinkDevices(devices) {
       const aesBadge = dev.lan_encryption_ready
         ? `<span class="status-pill" style="background:rgba(56,139,253,0.16);color:#79c0ff;" title="Controle local LAN AES-128-CBC pronto">🔒 AES LAN</span>`
         : "";
+      let fwBadge = "";
+      if (dev.firmware_type === "tasmota") {
+        fwBadge = `<span class="status-pill" style="background:rgba(219,109,40,0.2);color:#ffa657;" title="Tasmota MQTT / HTTP 100% Local">🟠 Tasmota</span>`;
+      } else if (dev.firmware_type === "esphome") {
+        fwBadge = `<span class="status-pill" style="background:rgba(46,160,67,0.2);color:#7ee787;" title="ESPHome MQTT / REST Local">🟢 ESPHome</span>`;
+      } else if (dev.firmware_type === "mqtt_json") {
+        fwBadge = `<span class="status-pill" style="background:rgba(163,113,247,0.2);color:#d2a8ff;" title="MQTT JSON Genérico">📡 MQTT</span>`;
+      }
       const state = dev.last_state || {};
 
       let subText = dev.model_hint || dev.device_id;
@@ -122,7 +159,7 @@ function renderEwelinkDevices(devices) {
           <div class="device-info">
             <span class="device-icon">${getDeviceIcon(dev)}</span>
             <div>
-              <strong>${escapeHtml(dev.name)}</strong>${statusBadge}${aesBadge}
+              <strong>${escapeHtml(dev.name)}</strong>${statusBadge}${fwBadge}${aesBadge}
               <p class="device-sub">${escapeHtml(subText)}</p>
             </div>
           </div>
@@ -427,6 +464,74 @@ async function simulateTelemetry(temp, motion) {
     body: JSON.stringify({ device_id: "sensor_presenca_sala", metric: "motion", value: motion, unit: "detected" })
   });
   updateDashboard();
+}
+
+// Modal de Configuração MQTT / Tasmota / ESPHome
+function openMqttModal() {
+  const selectEl = document.getElementById("mqtt-device-select");
+  if (!selectEl) return;
+
+  selectEl.innerHTML = cachedDevices
+    .map(d => `<option value="${escapeHtml(d.device_id)}">${escapeHtml(d.name)} (${escapeHtml(d.device_id)})</option>`)
+    .join("");
+  onMqttDeviceSelectChange();
+  document.getElementById("mqtt-modal").style.display = "flex";
+}
+
+function closeMqttModal() {
+  document.getElementById("mqtt-modal").style.display = "none";
+}
+
+function onMqttDeviceSelectChange() {
+  const deviceId = document.getElementById("mqtt-device-select").value;
+  const dev = cachedDevices.find(d => d.device_id === deviceId);
+  if (!dev) return;
+
+  const fw = dev.firmware_type && dev.firmware_type !== "ewelink" ? dev.firmware_type : "tasmota";
+  document.getElementById("mqtt-firmware-type").value = fw;
+  document.getElementById("mqtt-topic-input").value = dev.mqtt_topic || dev.device_id;
+  document.getElementById("mqtt-ip-input").value = dev.ip_address || "";
+  document.getElementById("mqtt-channel-input").value = dev.channel_outlet || 0;
+  document.getElementById("mqtt-domain-input").value = dev.entity_domain || "switch";
+}
+
+async function saveMqttDeviceConfig() {
+  const targetDevice = document.getElementById("mqtt-device-select").value;
+  const firmwareType = document.getElementById("mqtt-firmware-type").value;
+  const mqttTopic = document.getElementById("mqtt-topic-input").value.trim();
+  const ipAddress = document.getElementById("mqtt-ip-input").value.trim() || null;
+  const channelOutlet = parseInt(document.getElementById("mqtt-channel-input").value || "0", 10);
+  const entityDomain = document.getElementById("mqtt-domain-input").value;
+
+  try {
+    const res = await fetch("/mqtt/devices/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_device: targetDevice,
+        firmware_type: firmwareType,
+        mqtt_topic: mqttTopic || targetDevice,
+        ip_address: ipAddress,
+        port: firmwareType === "ewelink" ? 8081 : 80,
+        is_multichannel: channelOutlet > 0,
+        channel_outlet: channelOutlet,
+        entity_domain: entityDomain,
+        entity_id: targetDevice
+      })
+    });
+    if (res.ok) {
+      closeMqttModal();
+      const statusEl = document.getElementById("sync-status-text");
+      if (statusEl) {
+        statusEl.innerText = `✔ ${targetDevice} configurado como ${firmwareType.toUpperCase()} (${mqttTopic || targetDevice})`;
+      }
+      updateDashboard();
+    } else {
+      alert("Falha ao salvar configuração MQTT.");
+    }
+  } catch (err) {
+    alert("Erro ao conectar à API: " + err);
+  }
 }
 
 function escapeHtml(text) {

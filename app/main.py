@@ -18,6 +18,7 @@ from app.config import settings
 from app.engine import EdgeLLMEngine
 from app.ewelink_gateway import ewelink_gateway
 from app.memory import ContextManager
+from app.mqtt_gateway import OPEN_FIRMWARE_TYPES, mqtt_gateway
 from app.schemas import (
     ActionType,
     ChatRequest,
@@ -28,6 +29,8 @@ from app.schemas import (
     FeedbackRequest,
     FeedbackResponse,
     HealthResponse,
+    MqttPublishRequest,
+    OpenFirmwarePairRequest,
     PreferenceItem,
     TelemetryEvent,
 )
@@ -61,12 +64,36 @@ def get_context_mgr() -> ContextManager:
     return context_mgr
 
 
+def _ingest_mqtt_telemetry(device_id: str, metric: str, value: float, unit: str = "") -> None:
+    """Encaminha leituras recebidas via MQTT (Tasmota/ESPHome) para memória e estado dos sensores."""
+    c_mgr = get_context_mgr()
+    short_key = device_id
+    if metric == "humidity" and device_id.startswith("sensor_temp_"):
+        short_key = device_id.replace("sensor_temp_", "sensor_umidade_", 1)
+
+    c_mgr.short_term.add_telemetry(device_id=short_key, metric=metric, value=value, unit=unit)
+    c_mgr.long_term.record_telemetry(device_id=device_id, metric=metric, value=value, unit=unit)
+    ewelink_gateway.handle_mqtt_device_update(
+        device_id,
+        {"online": True, "last_state": {metric: value}},
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Inicialização e desligamento gracioso dos serviços e modelos."""
     logger.info("Iniciando iaparacasa Edge AI Automation Service...")
     c_mgr = get_context_mgr()
     ewelink_gateway.attach_memory(c_mgr.long_term)
+    mqtt_gateway.attach_callbacks(
+        device_update_cb=ewelink_gateway.handle_mqtt_device_update,
+        telemetry_cb=_ingest_mqtt_telemetry,
+        discovery_cb=ewelink_gateway.handle_tasmota_discovery,
+        topic_resolver_cb=ewelink_gateway.resolve_device_by_mqtt_topic,
+    )
+    if settings.MQTT_ENABLED and not settings.USE_MOCK_ENGINE:
+        mqtt_gateway.start(wait_timeout=0.3)
+
     eng = get_engine()
 
     ram_mb = eng.get_memory_usage_mb()
@@ -77,6 +104,7 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Encerrando serviços do iaparacasa...")
+    mqtt_gateway.stop()
     ewelink_gateway.close()
 
 
@@ -394,7 +422,7 @@ def control_ewelink_device(
     params: Optional[Dict[str, Any]] = None
 ):
     """
-    Aciona diretamente um dispositivo Sonoff/eWeLink via LAN DIY ou Nuvem.
+    Aciona diretamente um dispositivo Sonoff/eWeLink/Tasmota/ESPHome via MQTT, LAN DIY ou Nuvem.
     Aplica compulsoriamente a proteção de Inching para portões.
     """
     return ewelink_gateway.execute_command(
@@ -402,3 +430,45 @@ def control_ewelink_device(
         command=command,
         params=params or {}
     )
+
+
+@app.get("/mqtt/status", tags=["MQTT & Firmware Aberto"])
+def get_mqtt_status():
+    """Retorna o estado do cliente MQTT local (Mosquitto) e dispositivos Tasmota/ESPHome pareados."""
+    status_info = mqtt_gateway.get_status()
+    open_fw_count = sum(
+        1 for d in ewelink_gateway.devices.values() if d.firmware_type in OPEN_FIRMWARE_TYPES
+    )
+    status_info["hardware_bridge_enabled"] = bool(settings.ENABLE_HARDWARE_BRIDGE)
+    status_info["open_firmware_devices_count"] = open_fw_count
+    return status_info
+
+
+@app.post("/mqtt/devices/pair", tags=["MQTT & Firmware Aberto"])
+def pair_open_firmware_device(request: OpenFirmwarePairRequest):
+    """Configura um atuador/sensor para controle local 100% offline via Tasmota, ESPHome ou JSON MQTT."""
+    return ewelink_gateway.pair_open_firmware_device(
+        target_device=request.target_device,
+        firmware_type=request.firmware_type,
+        mqtt_topic=request.mqtt_topic,
+        ip_address=request.ip_address,
+        port=request.port,
+        is_multichannel=request.is_multichannel,
+        channel_outlet=request.channel_outlet,
+        entity_domain=request.entity_domain,
+        entity_id=request.entity_id,
+        name=request.name,
+        group=request.group,
+    )
+
+
+@app.post("/mqtt/publish", tags=["MQTT & Firmware Aberto"])
+def publish_mqtt_message(request: MqttPublishRequest):
+    """Publica mensagem manual no broker MQTT local para diagnóstico/testes de dispositivos."""
+    ok, details = mqtt_gateway.publish_raw(
+        topic=request.topic,
+        payload=request.payload,
+        qos=request.qos,
+        retain=request.retain,
+    )
+    return {"success": ok, "details": details}

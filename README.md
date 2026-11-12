@@ -327,7 +327,29 @@ curl -X POST http://localhost:8000/feedback \
 
 ---
 
-## 9. Execução da Bateria de Testes Automatizados
+## 9. Firmware Aberto (Tasmota / ESPHome) + MQTT Local (100% Offline)
+
+Para operar os módulos Sonoff sem nenhuma dependência de nuvem, conta eWeLink ou paywall:
+- O `docker-compose.yml` já sobe automaticamente o broker local **`eclipse-mosquitto:2`** (`iaparacasa-mqtt` na porta `1883`) conectado ao `iaparacasa-edge`.
+- Os templates prontos ficam em [`firmware_templates/`](firmware_templates/):
+  - `firmware_templates/tasmota_comandos_setup.txt` (comandos `Backlog` para console do Tasmota, incluindo `PulseTime 10` seguro de 1s no `portao_garagem`)
+  - `firmware_templates/esphome_portao_garagem.yaml` e `firmware_templates/esphome_switch_generico.yaml` (MQTT + REST API fallback na porta `80`)
+- Pelo painel web (`⚙️ MQTT`) ou via API `POST /mqtt/devices/pair`:
+```bash
+curl -X POST http://localhost:8000/mqtt/devices/pair \
+     -H "Content-Type: application/json" \
+     -d '{
+       "target_device": "portao_garagem",
+       "firmware_type": "tasmota",
+       "mqtt_topic": "portao_garagem",
+       "ip_address": "192.168.1.150"
+     }'
+```
+- O `iaparacasa` também escuta automaticamente `tele/+/LWT`, `stat/+/POWER*`, `tele/+/SENSOR` (alimentando o contexto de temperatura/umidade no SQLite e RAM) e `tasmota/discovery/+/config`.
+
+---
+
+## 10. Execução da Bateria de Testes Automatizados
 
 Para executar os testes unitários e de integração:
 ```bash
@@ -338,10 +360,12 @@ Cobertura dos testes:
 - `tests/test_schemas.py`: Validação Pydantic, serialização JSON e conversão compulsória de `power_on` em `pulse` para portões.
 - `tests/test_memory.py`: Limite de capacidade do buffer circular, seeding de regras no SQLite, ranking léxico/semântico contextual e reforço de confiança via feedback.
 - `tests/test_api.py`: Ciclo de vida completo dos endpoints FastAPI (`/health`, `/chat`, `/feedback`, `/telemetry`, `/preferences`).
+- `tests/test_ewelink_lan.py`: Criptografia AES-128-CBC LAN, descoberta mDNS TXT, multi-canal e persistência SQLite.
+- `tests/test_mqtt_open_firmware.py`: Tasmota (`MQTT` + fallback `HTTP`), ESPHome (`MQTT` + `REST`), `PulseTime`, Auto-Discovery, telemetria inbound e endpoints `/mqtt/*`.
 
 ---
 
-## 10. Licença e Conclusão
+## 11. Licença e Conclusão
 
 Projeto desenvolvido sob os mais rigorosos padrões de **Edge AI**, **segurança elétrica/doméstica** e **eficiência computacional**, permitindo transformar qualquer mini PC ou servidor doméstico em um cérebro inteligente, privado e independente de nuvem externa.
 

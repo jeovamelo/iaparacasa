@@ -488,7 +488,9 @@ body {
 
 .form-group { margin-bottom: 16px; }
 .form-group label { display: block; font-size: 12px; margin-bottom: 6px; color: #fff; }
-.form-group textarea {
+.form-group textarea,
+.form-group input,
+.form-group select {
   width: 100%;
   background: #0d1117;
   border: 1px solid var(--border-color);
@@ -496,7 +498,13 @@ body {
   color: #fff;
   padding: 8px 12px;
   font-size: 12px;
-  resize: vertical;
+  box-sizing: border-box;
+}
+.form-group textarea { resize: vertical; }
+.form-row-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
 .modal-actions {

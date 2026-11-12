@@ -1,0 +1,30 @@
+# ==============================================================================
+# iaparacasa - Comandos Prontos para Console Web do Tasmota (100% Offline)
+# ==============================================================================
+# Passo 1: Grave o Tasmota via USB-TTL 3.3V (NUNCA conecte a rede AC 110/220V durante a gravação!)
+#          Ferramenta oficial no navegador (Chrome/Edge): https://tasmota.github.io/install/
+# Passo 2: Conecte no Wi-Fi criado pelo módulo (tasmota-XXXX), informe seu Wi-Fi e acesse o IP do Tasmota.
+# Passo 3: Abra "Console" na interface web do Tasmota e cole UM dos comandos Backlog abaixo
+#          substituindo <IP_DO_SERVIDOR> pelo IP LAN da máquina rodando o Docker (ex: 192.168.1.50).
+
+# ------------------------------------------------------------------------------
+# A) PORTÃO DA GARAGEM (Contato Seco com Pulso Seguro de 1000ms / Inching)
+# - PulseTime 10   => Desliga automaticamente após 1,0s mesmo se o Wi-Fi cair
+# - PowerOnState 0 => Garante que após queda de energia o portão NUNCA acione sozinho
+# - Topic portao_garagem => O iaparacasa reconhece automaticamente
+# ------------------------------------------------------------------------------
+Backlog MqttHost <IP_DO_SERVIDOR>; MqttPort 1883; Topic portao_garagem; DeviceName Portao Garagem; FriendlyName1 Portao Garagem; PowerOnState 0; PulseTime 10; SetOption19 0; TelePeriod 60
+
+# ------------------------------------------------------------------------------
+# B) INTERRUPTOR / LUZ ÚNICA (ex: luz_sala, jardim_deck, corredor_cima, varanda_superior)
+# Substitua "luz_sala" pelo device_id desejado:
+#   varanda_superior | corredor_cima | jardim_deck | corredor_externo
+#   jardim_varanda   | jardim_garagem | jardim_principal | luz_sala
+# ------------------------------------------------------------------------------
+Backlog MqttHost <IP_DO_SERVIDOR>; MqttPort 1883; Topic luz_sala; DeviceName Luz Sala; FriendlyName1 Luz Sala; PowerOnState 0; PulseTime 0; SetOption19 0; TelePeriod 60
+
+# ------------------------------------------------------------------------------
+# C) SENSOR DE TEMPERATURA / UMIDADE (ex: Sonoff TH16 / DS18B20 / AM2301)
+# Publicará automaticamente leituras em tele/sensor_temp_sala/SENSOR
+# ------------------------------------------------------------------------------
+Backlog MqttHost <IP_DO_SERVIDOR>; MqttPort 1883; Topic sensor_temp_sala; DeviceName Sensor Sala; TelePeriod 30

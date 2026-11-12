@@ -21,7 +21,8 @@
       <span class="badge badge-success" id="badge-status">● Sistema Operacional</span>
       <span class="badge badge-info" id="badge-engine">🧠 Engine: Conectando...</span>
       <span class="badge badge-warning" id="badge-ram">💾 RAM: -- MB</span>
-      <span class="badge badge-purple" id="badge-ewelink">⚡ eWeLink LAN Dual-Mode</span>
+      <span class="badge badge-info" id="badge-mqtt">📡 MQTT: Verificando...</span>
+      <span class="badge badge-purple" id="badge-ewelink">⚡ LAN / Open Firmware</span>
     </div>
   </header>
 
@@ -51,13 +52,16 @@
         </div>
       </div>
 
-      <!-- Controle Manual de Dispositivos eWeLink / Sonoff (Minha Casa) -->
+      <!-- Controle Manual de Dispositivos (Tasmota / ESPHome / eWeLink) -->
       <div class="card">
         <div class="card-header">
-          <span class="card-title">🔌 Dispositivos eWeLink (Minha Casa)</span>
-          <button class="btn-sync" onclick="syncEwelinkDevices()" id="btn-sync" title="Sincronizar com CoolKit API v2 / LAN">&#x21bb; Sincronizar</button>
+          <span class="card-title">🔌 Dispositivos (Minha Casa)</span>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn-sync" onclick="openMqttModal()" id="btn-mqtt-pair" title="Configurar dispositivo com Tasmota / ESPHome / MQTT">⚙️ MQTT</button>
+            <button class="btn-sync" onclick="syncEwelinkDevices()" id="btn-sync" title="Sincronizar / Atualizar topologia">&#x21bb; Sincronizar</button>
+          </div>
         </div>
-        <p class="card-desc" id="sync-status-text">Dual-Mode: LAN First / Fallback eWeLink Cloud API v2</p>
+        <p class="card-desc" id="sync-status-text">Offline Local: Tasmota / ESPHome (MQTT + HTTP) &amp; eWeLink LAN</p>
         <div class="device-controls" id="ewelink-device-groups">
           <div class="empty-state">Carregando dispositivos Sonoff / eWeLink...</div>
         </div>
@@ -147,6 +151,56 @@
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeFeedbackModal()">Cancelar</button>
         <button class="btn btn-primary" onclick="submitCorrection()">Salvar Novo Hábito</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Pareamento MQTT / Tasmota / ESPHome -->
+  <div class="modal-overlay" id="mqtt-modal" style="display: none;">
+    <div class="modal-box">
+      <h3>⚙️ Configurar Firmware Aberto (Tasmota / ESPHome)</h3>
+      <p class="modal-desc">
+        Vincule um dispositivo da sua casa ao broker Mosquitto local ou HTTP direto para operar 100% offline sem nuvem eWeLink.
+      </p>
+      <div class="form-group">
+        <label for="mqtt-device-select">Dispositivo Alvo</label>
+        <select id="mqtt-device-select" onchange="onMqttDeviceSelectChange()"></select>
+      </div>
+      <div class="form-group">
+        <label for="mqtt-firmware-type">Firmware / Driver</label>
+        <select id="mqtt-firmware-type">
+          <option value="tasmota">Tasmota (MQTT + HTTP fallback)</option>
+          <option value="esphome">ESPHome (MQTT + REST API)</option>
+          <option value="mqtt_json">MQTT JSON Genérico (iaparacasa/&lt;tópico&gt;/cmd)</option>
+          <option value="ewelink">eWeLink LAN / DIY Padrão</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="mqtt-topic-input">Tópico MQTT (ex: luz_sala, portao_garagem, tasmota_ABC123)</label>
+        <input type="text" id="mqtt-topic-input" placeholder="luz_sala" />
+      </div>
+      <div class="form-group">
+        <label for="mqtt-ip-input">IP Local (opcional para fallback HTTP direto na porta 80)</label>
+        <input type="text" id="mqtt-ip-input" placeholder="192.168.1.151" />
+      </div>
+      <div class="form-row-two">
+        <div class="form-group">
+          <label for="mqtt-channel-input">Canal (0 = POWER1, 1 = POWER2...)</label>
+          <input type="number" id="mqtt-channel-input" min="0" max="7" value="0" />
+        </div>
+        <div class="form-group">
+          <label for="mqtt-domain-input">Domínio ESPHome</label>
+          <select id="mqtt-domain-input">
+            <option value="switch">switch</option>
+            <option value="light">light</option>
+            <option value="button">button (pulso)</option>
+            <option value="climate">climate</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeMqttModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveMqttDeviceConfig()">Salvar no SQLite</button>
       </div>
     </div>
   </div>

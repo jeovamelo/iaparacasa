@@ -16,12 +16,23 @@ def client():
     # Cria banco temporário para a bateria de testes de API
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
+    prev_db = settings.DB_PATH
+    prev_mock = settings.USE_MOCK_ENGINE
+    prev_bridge = settings.ENABLE_HARDWARE_BRIDGE
+    prev_mqtt = settings.MQTT_ENABLED
+
     settings.DB_PATH = path
     settings.USE_MOCK_ENGINE = True  # Garante execução sem baixar 1GB em teste
+    settings.ENABLE_HARDWARE_BRIDGE = False
+    settings.MQTT_ENABLED = False
 
     with TestClient(app) as test_client:
         yield test_client
 
+    settings.DB_PATH = prev_db
+    settings.USE_MOCK_ENGINE = prev_mock
+    settings.ENABLE_HARDWARE_BRIDGE = prev_bridge
+    settings.MQTT_ENABLED = prev_mqtt
     if os.path.exists(path):
         os.unlink(path)
 

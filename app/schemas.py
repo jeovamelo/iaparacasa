@@ -241,3 +241,30 @@ class EWeLinkDevicePairRequest(BaseModel):
     is_multichannel: bool = Field(default=False, description="True para módulos multicanal (switches)")
     channel_outlet: int = Field(default=0, ge=0, le=7, description="Índice do canal (outlet) para módulos multicanal")
 
+
+class OpenFirmwarePairRequest(BaseModel):
+    target_device: str = Field(..., description="ID lógico do dispositivo na topologia (ex: 'luz_sala', 'portao_garagem')")
+    firmware_type: Literal["tasmota", "esphome", "mqtt_json", "ewelink"] = Field(
+        default="tasmota",
+        description="Driver de controle local: tasmota (MQTT + HTTP), esphome (MQTT + REST), mqtt_json ou ewelink"
+    )
+    mqtt_topic: Optional[str] = Field(
+        default=None,
+        description="Tópico MQTT base do módulo (ex: 'luz_sala', 'tasmota_AB12CD'). Se vazio, usa target_device"
+    )
+    ip_address: Optional[str] = Field(default=None, description="IP local opcional para fallback HTTP direto")
+    port: int = Field(default=80, description="Porta HTTP local (80 para Tasmota/ESPHome, 8081 para eWeLink)")
+    is_multichannel: bool = Field(default=False, description="True para módulos multi-relé (ex: Dual/4CH -> POWER1..4)")
+    channel_outlet: int = Field(default=0, ge=0, le=7, description="Canal 0-indexado (0=POWER1, 1=POWER2, ...)")
+    entity_domain: str = Field(default="switch", description="Domínio ESPHome opcional (switch, light, button, climate)")
+    entity_id: Optional[str] = Field(default=None, description="Slug da entidade no ESPHome (padrão target_device)")
+    name: Optional[str] = Field(default=None, description="Nome amigável exibido no painel")
+    group: Optional[str] = Field(default=None, description="Grupo exibido no painel")
+
+
+class MqttPublishRequest(BaseModel):
+    topic: str = Field(..., description="Tópico MQTT completo para publicação (ex: 'cmnd/luz_sala/POWER')")
+    payload: str = Field(..., description="Conteúdo textual ou JSON a publicar")
+    qos: int = Field(default=1, ge=0, le=2)
+    retain: bool = Field(default=False)
+

@@ -1,0 +1,49 @@
+# ==============================================================================
+# iaparacasa - ESPHome YAML Genérico para Interruptor / Jardim (ex: luz_sala)
+# ==============================================================================
+# Altere esphome.name, mqtt.topic_prefix e switch.id para o device_id desejado:
+#   varanda_superior, corredor_cima, jardim_deck, corredor_externo,
+#   jardim_varanda, jardim_garagem, jardim_principal, luz_sala
+
+esphome:
+  name: luz-sala
+  friendly_name: Luz da Sala
+
+esp8266:
+  board: esp01_1m
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+web_server:
+  port: 80
+
+mqtt:
+  broker: "<IP_DO_SERVIDOR>"
+  port: 1883
+  topic_prefix: luz_sala
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Botão Físico Luz Sala"
+    on_press:
+      - switch.toggle: luz_sala
+
+switch:
+  - platform: gpio
+    pin: GPIO12
+    id: luz_sala
+    name: "Luz da Sala"
+    restore_mode: ALWAYS_OFF
+
+status_led:
+  pin:
+    number: GPIO13
+    inverted: yes
