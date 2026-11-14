@@ -1,0 +1,30 @@
+[
+  {
+    "device": "Luz da Sala",
+    "on_result": "confirmed",
+    "off_result": "confirmed",
+    "timestamp": "2026-11-14T13:09:09Z",
+    "source": "ewelink_ui"
+  },
+  {
+    "device": "Luz da Sala Botão Ligar",
+    "on_result": "confirmed",
+    "off_result": "confirmed",
+    "timestamp": "2026-11-14T13:09:10Z",
+    "source": "ewelink_ui"
+  },
+  {
+    "device": "Luz do Corredor",
+    "on_result": "confirmed",
+    "off_result": "confirmed",
+    "timestamp": "2026-11-14T13:09:11Z",
+    "source": "ewelink_ui"
+  },
+  {
+    "device": "Luz do Corredor Botão Ligar",
+    "on_result": "confirmed",
+    "off_result": "confirmed",
+    "timestamp": "2026-11-14T13:09:12Z",
+    "source": "ewelink_ui"
+  }
+]

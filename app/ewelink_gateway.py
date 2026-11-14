@@ -4,6 +4,9 @@ Suporta controle local via ZeroConf/mDNS (baixa latência e sem dependência de 
 e fallback para API de Nuvem CoolKit, com garantia física de segurança para relés e portões.
 """
 
+from __future__ import annotations
+
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -13,12 +16,15 @@ import os
 import secrets
 import socket
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 import urllib.error
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+
+import aiohttp
 
 from app.config import settings
 from app.mqtt_gateway import (
@@ -102,7 +108,17 @@ DEVICE_ALIASES: Dict[str, str] = {
     "ac_sala": "ar_condicionado_sala",
     "sonoff_corredor_cima": "corredor_cima",
     "sonoff_varanda_superior": "varanda_superior",
+    "corredor_de_cima": "corredor_cima",
+    "corredor": "corredor_externo",
+    "jardim_da_varanda": "jardim_varanda",
+    "jardim_da_garagem": "jardim_garagem",
 }
+
+
+def normalize_device_slug(value: str) -> str:
+    """Normaliza nomes da nuvem e aliases locais sem depender de acentos."""
+    ascii_value = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii")
+    return "_".join(ascii_value.strip().lower().replace("-", " ").split())
 
 
 @dataclass
@@ -153,6 +169,7 @@ class EWeLinkGateway:
         self._runtime_access_token: str = ""
         self._runtime_refresh_token: str = ""
         self._runtime_region: str = ""
+        self._runtime_user_apikey: str = ""
         self._load_static_device_topology()
         self._apply_env_device_keys()
         self._apply_open_firmware_env_map()
@@ -222,7 +239,7 @@ class EWeLinkGateway:
         try:
             saved_rows = long_term_memory.get_ewelink_devices()
             for row in saved_rows:
-                dev_id = row["device_id"]
+                dev_id = self.resolve_device_id(row["device_id"])
                 if dev_id in self.devices:
                     dev = self.devices[dev_id]
                     dev.ewelink_device_id = row.get("ewelink_device_id") or dev.ewelink_device_id
@@ -240,8 +257,8 @@ class EWeLinkGateway:
                         dev.entity_domain = row["entity_domain"]
                     if row.get("entity_id"):
                         dev.entity_id = row["entity_id"]
+                    dev.online = bool(row.get("online", dev.online))
                     if dev.firmware_type in OPEN_FIRMWARE_TYPES:
-                        dev.online = bool(row.get("online", True))
                         dev.mode_available = "mqtt"
                     if row.get("last_state"):
                         dev.last_state.update(row["last_state"])
@@ -269,6 +286,19 @@ class EWeLinkGateway:
                     )
             if saved_rows:
                 logger.info(f"[SQLite] Carregados {len(saved_rows)} registros/chaves LAN e MQTT persistidos.")
+            # Configuração explícita do ambiente prevalece sobre IPs antigos do SQLite.
+            for dev_id, ip in (settings.SONOFF_DEVICE_MAP or {}).items():
+                canonical = self.resolve_device_id(dev_id)
+                if canonical in self.devices:
+                    self.devices[canonical].ip_address = ip or None
+            for dev_id, hardware_id in (settings.EWELINK_DEVICE_ID_MAP or {}).items():
+                canonical = self.resolve_device_id(dev_id)
+                if canonical in self.devices:
+                    self.devices[canonical].ewelink_device_id = hardware_id
+            self._apply_env_device_keys()
+            self._apply_open_firmware_env_map()
+            for dev in self.devices.values():
+                self._persist_device(dev)
         except Exception as e:
             logger.warning(f"Erro ao carregar registro eWeLink/MQTT persistido no SQLite: {e}")
 
@@ -312,7 +342,7 @@ class EWeLinkGateway:
                 group="Grupo Casa",
                 model_hint="Sonoff Relay",
                 ewelink_device_id=id_map.get("varanda_superior"),
-                ip_address=ip_map.get("varanda_superior", "192.168.1.140"),
+                ip_address=ip_map.get("varanda_superior"),
                 online=False,  # Reportado como Offline no inventario inicial
                 last_state={"switch": "off"},
             ),
@@ -323,7 +353,7 @@ class EWeLinkGateway:
                 group="Grupo Casa",
                 model_hint="Sonoff Switch",
                 ewelink_device_id=id_map.get("corredor_cima"),
-                ip_address=ip_map.get("corredor_cima", "192.168.1.141"),
+                ip_address=ip_map.get("corredor_cima"),
                 online=True,
                 last_state={"switch": "off"},
             ),
@@ -335,7 +365,7 @@ class EWeLinkGateway:
                 group="Grupo Externa",
                 model_hint="Sonoff Switch",
                 ewelink_device_id=id_map.get("jardim_deck"),
-                ip_address=ip_map.get("jardim_deck", "192.168.1.142"),
+                ip_address=ip_map.get("jardim_deck"),
                 online=True,
                 last_state={"switch": "off"},
             ),
@@ -346,7 +376,7 @@ class EWeLinkGateway:
                 group="Grupo Externa",
                 model_hint="Sonoff Switch",
                 ewelink_device_id=id_map.get("corredor_externo"),
-                ip_address=ip_map.get("corredor_externo", "192.168.1.143"),
+                ip_address=ip_map.get("corredor_externo"),
                 online=True,
                 last_state={"switch": "off"},
             ),
@@ -357,7 +387,7 @@ class EWeLinkGateway:
                 group="Grupo Externa",
                 model_hint="Sonoff Switch",
                 ewelink_device_id=id_map.get("jardim_varanda"),
-                ip_address=ip_map.get("jardim_varanda", "192.168.1.144"),
+                ip_address=ip_map.get("jardim_varanda"),
                 online=True,
                 last_state={"switch": "off"},
             ),
@@ -368,7 +398,7 @@ class EWeLinkGateway:
                 group="Grupo Externa",
                 model_hint="Sonoff Switch",
                 ewelink_device_id=id_map.get("jardim_garagem"),
-                ip_address=ip_map.get("jardim_garagem", "192.168.1.145"),
+                ip_address=ip_map.get("jardim_garagem"),
                 online=True,
                 last_state={"switch": "off"},
             ),
@@ -379,7 +409,7 @@ class EWeLinkGateway:
                 group="Grupo Externa",
                 model_hint="Sonoff Switch",
                 ewelink_device_id=id_map.get("jardim_principal"),
-                ip_address=ip_map.get("jardim_principal", "192.168.1.146"),
+                ip_address=ip_map.get("jardim_principal"),
                 online=True,
                 last_state={"switch": "off"},
             ),
@@ -391,7 +421,7 @@ class EWeLinkGateway:
                 group="Atuadores Locais",
                 model_hint="Sonoff Contato Seco (Inching 1000ms)",
                 ewelink_device_id=id_map.get("portao_garagem"),
-                ip_address=ip_map.get("portao_garagem", "192.168.1.150"),
+                ip_address=ip_map.get("portao_garagem"),
                 online=True,
                 last_state={"pulse": "off", "pulseWidth": 1000},
             ),
@@ -402,7 +432,7 @@ class EWeLinkGateway:
                 group="Atuadores Locais",
                 model_hint="Sonoff Switch",
                 ewelink_device_id=id_map.get("luz_sala"),
-                ip_address=ip_map.get("luz_sala", "192.168.1.151"),
+                ip_address=ip_map.get("luz_sala"),
                 online=True,
                 last_state={"switch": "off"},
             ),
@@ -413,7 +443,7 @@ class EWeLinkGateway:
                 group="Atuadores Locais",
                 model_hint="Clima / Cool",
                 ewelink_device_id=id_map.get("ar_condicionado_sala"),
-                ip_address=ip_map.get("ar_condicionado_sala", "192.168.1.152"),
+                ip_address=ip_map.get("ar_condicionado_sala"),
                 online=True,
                 last_state={"switch": "off", "temperature": 23, "mode": "cool"},
             ),
@@ -424,7 +454,7 @@ class EWeLinkGateway:
                 device_type="sensor",
                 group="Sensores",
                 model_hint="Sonoff TH16 / SNZB-02",
-                ip_address="192.168.1.160",
+                ip_address=None,
                 online=True,
                 last_state={"temperature": 25.0, "humidity": 60.0},
             ),
@@ -434,7 +464,7 @@ class EWeLinkGateway:
                 device_type="sensor",
                 group="Sensores",
                 model_hint="Sonoff SNZB-03",
-                ip_address="192.168.1.161",
+                ip_address=None,
                 online=True,
                 last_state={"motion": 0},
             ),
@@ -444,7 +474,7 @@ class EWeLinkGateway:
 
     def resolve_device_id(self, target_device: str) -> str:
         """Resolve aliases legados para os IDs canônicos da topologia Minha Casa."""
-        clean = (target_device or "").strip().lower().replace(" ", "_").replace("-", "_")
+        clean = normalize_device_slug(target_device)
         return DEVICE_ALIASES.get(clean, clean)
 
     def _active_cloud_token(self) -> str:
@@ -555,6 +585,7 @@ class EWeLinkGateway:
                 self._runtime_access_token = login_data.get("at", "")
                 self._runtime_refresh_token = login_data.get("rt", "")
                 self._runtime_region = login_data.get("region") or region
+                self._runtime_user_apikey = login_data.get("user", {}).get("apikey", "")
                 return {
                     "success": True,
                     "region": self._runtime_region,
@@ -597,7 +628,10 @@ class EWeLinkGateway:
             if not info or not info.addresses:
                 return
 
-            ip = socket.inet_ntoa(info.addresses[0])
+            ipv4 = next((addr for addr in info.addresses if len(addr) == 4), None)
+            if ipv4 is None:
+                return
+            ip = socket.inet_ntoa(ipv4)
             props = self._decode_mdns_properties(info.properties)
             raw_service = name.split(".")[0]
             stripped_id = raw_service[8:] if raw_service.lower().startswith("ewelink_") else raw_service
@@ -650,11 +684,25 @@ class EWeLinkGateway:
         except Exception as e:
             logger.error(f"Erro ao processar anúncio mDNS: {e}")
 
+    def update_device_address(self, target_device: str, ip_address: str, port: int = 8081):
+        """Altera somente endereço/porta, preservando chaves, driver e estado SQLite."""
+        from ipaddress import IPv4Address
+        address = str(IPv4Address(ip_address))
+        if not 1 <= port <= 65535:
+            raise ValueError("Porta inválida")
+        dev = self.get_device(target_device)
+        if dev is None:
+            raise KeyError(target_device)
+        dev.ip_address = address
+        dev.port = port
+        self._persist_device(dev)
+        return {"success": True, "device": dev.to_public_dict()}
+
     def pair_device(
         self,
         target_device: str,
         ewelink_device_id: str,
-        device_key: str,
+        device_key: Optional[str] = None,
         self_apikey: str = "123",
         ip_address: Optional[str] = None,
         port: int = 8081,
@@ -673,7 +721,8 @@ class EWeLinkGateway:
             self.devices[canonical] = dev
 
         dev.ewelink_device_id = ewelink_device_id.strip()
-        dev.device_key = device_key.strip()
+        if device_key is not None:
+            dev.device_key = device_key.strip()
         dev.self_apikey = self_apikey.strip() or "123"
         if ip_address:
             dev.ip_address = ip_address.strip()
@@ -774,8 +823,7 @@ class EWeLinkGateway:
         if isinstance(patch.get("last_state"), dict):
             dev.last_state.update(patch["last_state"])
         dev.last_seen = datetime.now().isoformat()
-        if dev.firmware_type in OPEN_FIRMWARE_TYPES:
-            self._persist_device(dev)
+        self._persist_device(dev)
 
     def handle_tasmota_discovery(self, cfg: Dict[str, Any]) -> None:
         """Processa anúncio automático tasmota/discovery/<mac>/config."""
@@ -897,18 +945,20 @@ class EWeLinkGateway:
                 cloud_id = item.get("deviceid")
                 device_key = item.get("devicekey")
                 self_apikey = item.get("apikey") or "123"
-                raw_name = (item.get("name") or "").strip().lower().replace(" ", "_")
+                raw_name = normalize_device_slug(item.get("name") or "")
                 online = bool(item.get("online", False))
                 params = item.get("params", {}) or {}
                 is_multi = isinstance(params.get("switches"), list)
 
                 # Tenta associar por ewelink_device_id ou nome normalizado
-                matched_dev = next(
-                    (d for d in self.devices.values() if d.ewelink_device_id == cloud_id),
-                    None,
-                )
-                if not matched_dev and raw_name:
-                    matched_dev = self.devices.get(self.resolve_device_id(raw_name))
+                # O nome conhecido da topologia tem prioridade sobre um registro
+                # legado criado antes da normalização de aliases.
+                matched_dev = self.devices.get(self.resolve_device_id(raw_name)) if raw_name else None
+                if not matched_dev:
+                    matched_dev = next(
+                        (d for d in self.devices.values() if d.ewelink_device_id == cloud_id),
+                        None,
+                    )
 
                 if matched_dev:
                     matched_dev.ewelink_device_id = cloud_id
@@ -924,7 +974,7 @@ class EWeLinkGateway:
                     self._persist_device(matched_dev)
                     updated += 1
                 elif cloud_id:
-                    slug = raw_name or f"ewelink_{cloud_id}"
+                    slug = self.resolve_device_id(raw_name) if raw_name else f"ewelink_{cloud_id}"
                     new_dev = SonoffDevice(
                         device_id=slug,
                         name=item.get("name") or slug,
@@ -980,7 +1030,12 @@ class EWeLinkGateway:
         if is_gate and command == CommandType.POWER_ON:
             logger.warning(f"Tentativa de 'power_on' no dispositivo {canonical_id}. Convertendo compulsoriamente para 'pulse'.")
             command = CommandType.PULSE
-            params["pulse_duration_ms"] = params.get("pulse_duration_ms", 1000)
+        if is_gate and command == CommandType.PULSE:
+            params = {"pulse_duration_ms": 1000}
+
+        if is_gate and command not in (CommandType.PULSE, CommandType.POWER_OFF):
+            return {"success": False, "mode": "unsafe_gate_command", "target_device": canonical_id,
+                    "details": "Portão aceita somente pulse de 1000ms ou power_off."}
 
         is_offline = bool(device and not device.online)
 
@@ -1008,7 +1063,8 @@ class EWeLinkGateway:
             return self._dispatch_open_firmware(device, command, params)
 
         # 1. Tenta Modo Local LAN (AES-128-CBC ou DIY REST na porta 8081)
-        if device and device.ip_address and device.online:
+        lan_details = "IP LAN não configurado; configure SONOFF_DEVICE_MAP ou pareie o aparelho."
+        if device and device.ip_address:
             lan_success, lan_details = self._send_lan_diy(device, command, params)
             if lan_success:
                 self._update_device_state(canonical_id, command, params)
@@ -1037,17 +1093,15 @@ class EWeLinkGateway:
                 "details": cloud_details
             }
 
-        # 3. Se nenhuma rota física respondeu, emite simulação segura para teste local
-        logger.info(f"[Modo Simulação Local] Atuador {canonical_id} acionado com comando {command.value}.")
-        self._update_device_state(canonical_id, command, params)
+        # Falha física nunca deve ser apresentada como atuação bem-sucedida.
         return {
-            "success": True,
-            "mode": "simulated_local",
+            "success": False,
+            "mode": "hardware_unreachable",
             "target_device": canonical_id,
             "command": command.value,
             "params": params,
             "offline_warning": is_offline,
-            "details": "Rotas físicas indisponíveis; comando registrado no controlador local."
+            "details": {"lan": lan_details, "cloud": cloud_details}
         }
 
     def _dispatch_open_firmware(
@@ -1063,6 +1117,13 @@ class EWeLinkGateway:
         domain = device.entity_domain or "switch"
         entity_id = device.entity_id or device.device_id
         attempts: List[Tuple[str, Any]] = []
+
+        if is_momentary_gate_device(device.device_id) and command != CommandType.POWER_OFF and fw_type in ("esphome", "mqtt_json"):
+            return {
+                "success": False, "mode": "unsafe_pulse_configuration",
+                "target_device": device.device_id, "command": command.value,
+                "details": "Portão requer temporizador de 1000ms no hardware; use Tasmota PulseTime ou eWeLink inching.",
+            }
 
         if fw_type == "tasmota":
             if mqtt_gateway.is_connected():
@@ -1200,7 +1261,13 @@ class EWeLinkGateway:
             )
             with urllib.request.urlopen(req, timeout=1.5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                return (data.get("error", 0) == 0), data
+                ok = data.get("error") == 0
+                if ok and command == CommandType.PULSE:
+                    time.sleep(0.2)
+                    return self._send_lan_diy(device, CommandType.POWER_ON, {"outlet": outlet} if is_multi else {})
+                if data.get("error") == 401 and not device.device_key:
+                    return False, "LAN criptografada exige device_key; ausência de chave não ativa Modo DIY."
+                return ok, data
         except Exception as e:
             return False, str(e)
 
@@ -1211,52 +1278,143 @@ class EWeLinkGateway:
         """
         cloud_token = self._active_cloud_token()
         if not cloud_token:
-            return False, "Credenciais de nuvem eWeLink não configuradas no ambiente (.env)."
+            login_result = self.login_cloud()
+            if not login_result.get("success"):
+                return False, {
+                    "message": "Falha ao autenticar na nuvem eWeLink.",
+                    "login": login_result,
+                }
+            cloud_token = self._active_cloud_token()
 
-        url = f"{self.get_cloud_api_base_url()}/v2/device/thing/status"
-        payload: Dict[str, Any] = {
-            "type": 1,
-            "id": target_device,
-            "params": {}
-        }
+        device = self._find_device_by_cloud_id(target_device)
+        if not device:
+            return False, f"Dispositivo eWeLink não encontrado: {target_device}"
 
-        if command == CommandType.POWER_ON:
-            payload["params"]["switch"] = "on"
-        elif command == CommandType.POWER_OFF:
-            payload["params"]["switch"] = "off"
+        is_multi = bool(device and (device.is_multichannel or "outlet" in params))
+        outlet = int(params.get("outlet", device.channel_outlet if device else 0))
+        command_params: Dict[str, Any] = {}
+        if command in (CommandType.POWER_ON, CommandType.POWER_OFF):
+            switch = "on" if command == CommandType.POWER_ON else "off"
+            command_params = ({"switches": [{"switch": switch, "outlet": outlet}]}
+                              if is_multi else {"switch": switch})
         elif command == CommandType.PULSE:
-            payload["params"]["pulse"] = "on"
-            payload["params"]["pulseWidth"] = params.get("pulse_duration_ms", 1000)
+            width = params.get("pulse_duration_ms", 1000)
+            command_params = ({"pulses": [{"pulse": "on", "width": width, "outlet": outlet}]}
+                              if is_multi else {"pulse": "on", "pulseWidth": width})
         else:
-            payload["params"] = params
+            command_params = params
 
-        body_str = json.dumps(payload, separators=(",", ":"))
         try:
-            req = urllib.request.Request(
-                url,
-                data=body_str.encode("utf-8"),
-                headers=self._build_coolkit_headers(body_str)
-            )
-            with urllib.request.urlopen(req, timeout=3.0) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return (data.get("error") == 0), data
+            ok, data = asyncio.run(self._cloud_ws_exchange(device, command_params))
+            if ok and command == CommandType.PULSE:
+                time.sleep(0.2)
+                return self._send_cloud_coolkit(target_device, CommandType.POWER_ON, {})
+            return ok, data
         except Exception as e:
             return False, str(e)
+
+    async def _cloud_ws_exchange(
+        self,
+        device: SonoffDevice,
+        command_params: Optional[Dict[str, Any]],
+    ) -> Tuple[bool, Any]:
+        """Executa query/update pelo WebSocket oficial usado pelo aplicativo eWeLink."""
+        if not self._runtime_user_apikey:
+            return False, "Login CoolKit não retornou a apikey do usuário."
+
+        region = self._runtime_region or getattr(settings, "EWELINK_REGION", "us") or "us"
+        dispatch_url = f"https://{region}-dispa.coolkit.cc/dispatch/app"
+        headers = {"Authorization": f"Bearer {self._active_cloud_token()}"}
+        app_id = getattr(settings, "EWELINK_APP_ID", "")
+        if app_id:
+            headers["X-CK-Appid"] = app_id
+
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(dispatch_url, headers=headers) as response:
+                dispatch = await response.json()
+            if not dispatch.get("domain") or not dispatch.get("port"):
+                return False, {"stage": "dispatch", "response": dispatch}
+
+            ws_url = f"wss://{dispatch['domain']}:{dispatch['port']}/api/ws"
+            async with session.ws_connect(ws_url, heartbeat=90) as ws:
+                now = time.time()
+                handshake_sequence = str(int(now * 1000))
+                await ws.send_json({
+                    "action": "userOnline",
+                    "at": self._active_cloud_token(),
+                    "apikey": self._runtime_user_apikey,
+                    "appid": app_id,
+                    "nonce": str(int(now / 100)),
+                    "ts": int(now),
+                    "userAgent": "app",
+                    "sequence": handshake_sequence,
+                    "version": 8,
+                })
+                handshake = await ws.receive_json(timeout=10)
+                if handshake.get("error", 0) != 0:
+                    return False, {"stage": "handshake", "response": handshake}
+
+                sequence = str(int(time.time() * 1000))
+                await ws.send_json({
+                    "action": "update" if command_params is not None else "query",
+                    "apikey": device.self_apikey or self._runtime_user_apikey,
+                    "deviceid": device.ewelink_device_id or device.device_id,
+                    "params": command_params if command_params is not None else [],
+                    "ts": 0,
+                    "userAgent": "app",
+                    "sequence": sequence,
+                })
+
+                deadline = time.monotonic() + 10
+                seen_messages: List[Dict[str, Any]] = []
+                while time.monotonic() < deadline:
+                    try:
+                        message = await ws.receive_json(timeout=max(0.1, deadline - time.monotonic()))
+                    except asyncio.TimeoutError:
+                        return False, {"stage": "command", "error": "timeout", "seen": seen_messages}
+                    seen_messages.append({
+                        "action": message.get("action"),
+                        "sequence": str(message.get("sequence", "")),
+                        "deviceid": message.get("deviceid"),
+                        "error": message.get("error"),
+                    })
+                    msg_seq = str(message.get("sequence", ""))
+                    msg_dev = str(message.get("deviceid", ""))
+                    target_dev_id = str(device.ewelink_device_id or device.device_id)
+                    if msg_seq != sequence and (not msg_dev or msg_dev != target_dev_id):
+                        continue
+                    error = message.get("error")
+                    is_ok = (error is None) or (error == 0) or (error == "0")
+                    return is_ok, message
+                return False, {"stage": "command", "error": "timeout", "seen": seen_messages}
 
     def _update_device_state(self, target_device: str, command: CommandType, params: Dict[str, Any]):
         """Mantém a tabela de estados em memória sincronizada."""
         if target_device in self.devices:
             dev = self.devices[target_device]
             dev.last_seen = datetime.now().isoformat()
-            if command == CommandType.POWER_ON:
-                dev.last_state["switch"] = "on"
-            elif command == CommandType.POWER_OFF:
-                dev.last_state["switch"] = "off"
-            elif command == CommandType.PULSE:
-                dev.last_state["last_pulse"] = datetime.now().isoformat()
-                dev.last_state["pulseWidth"] = params.get("pulse_duration_ms", 1000)
-            elif command == CommandType.SET_STATE:
-                dev.last_state.update(params)
+            outlet = params.get("outlet", dev.channel_outlet if dev.is_multichannel else None)
+            if dev.is_multichannel and outlet is not None:
+                outlet_idx = int(outlet)
+                switches = dev.last_state.get("switches", [])
+                if not switches:
+                    switches = [{"switch": "off", "outlet": i} for i in range(4)]
+                for s in switches:
+                    if s.get("outlet") == outlet_idx:
+                        s["switch"] = "on" if command == CommandType.POWER_ON else "off"
+                dev.last_state["switches"] = switches
+                dev.last_state["switch"] = "on" if any(s.get("switch") == "on" for s in switches) else "off"
+            else:
+                if command == CommandType.POWER_ON:
+                    dev.last_state["switch"] = "on"
+                elif command == CommandType.POWER_OFF:
+                    dev.last_state["switch"] = "off"
+                elif command == CommandType.PULSE:
+                    dev.last_state["last_pulse"] = datetime.now().isoformat()
+                    dev.last_state["pulseWidth"] = params.get("pulse_duration_ms", 1000)
+                elif command == CommandType.SET_STATE:
+                    dev.last_state.update(params)
 
     def close(self):
         if self.zeroconf:

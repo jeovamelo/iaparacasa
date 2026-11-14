@@ -86,8 +86,8 @@ class DecisionOutput(BaseModel):
         if is_momentary_gate_device(self.target_device) and self.command == CommandType.POWER_ON:
             # Converte com segurança para pulso de 1 segundo (inching mode)
             self.command = CommandType.PULSE
-            if "pulse_duration_ms" not in self.params:
-                self.params["pulse_duration_ms"] = 1000
+        if is_momentary_gate_device(self.target_device) and self.command == CommandType.PULSE:
+            self.params["pulse_duration_ms"] = 1000
 
         # Para comandos de pulso sem especificação de duração, fixa default seguro de 1000ms
         if self.command == CommandType.PULSE and "pulse_duration_ms" not in self.params:
@@ -170,6 +170,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    hardware_result: Optional[Dict[str, Any]] = None
     decision: DecisionOutput
     ewelink_command: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -234,7 +235,7 @@ class HealthResponse(BaseModel):
 class EWeLinkDevicePairRequest(BaseModel):
     target_device: str = Field(..., description="ID lógico do dispositivo (ex: 'luz_sala', 'portao_garagem')")
     ewelink_device_id: str = Field(..., description="ID hexadecimal de 10 dígitos do hardware na eWeLink")
-    device_key: str = Field(..., description="Chave local AES-128 obtida pela API oficial eWeLink")
+    device_key: Optional[str] = Field(default=None, description="Chave LAN AES; omitir preserva a chave salva. DIY não requer chave.")
     self_apikey: str = Field(default="123", description="API key do proprietário (apikey)")
     ip_address: Optional[str] = Field(default=None, description="IP local opcional na LAN")
     port: int = Field(default=8081, description="Porta HTTP LAN (padrão 8081)")

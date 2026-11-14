@@ -4,6 +4,7 @@ Tasmota (MQTT + fallback HTTP), ESPHome (MQTT + REST API), Auto-Discovery,
 telemetria inbound de sensores, migração SQLite e segurança de pulso para portões.
 """
 
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -262,7 +263,7 @@ def test_inbound_mqtt_tasmota_lwt_discovery_and_sensor_telemetry(temp_db):
 def test_sqlite_legacy_migration_and_mqtt_pair_endpoints(temp_db):
     """Garante migração segura de tabela antiga SQLite e endpoints /mqtt/devices/pair + /mqtt/status."""
     # Cria tabela no formato antigo (sem colunas MQTT/open firmware)
-    with sqlite3.connect(temp_db) as conn:
+    with closing(sqlite3.connect(temp_db)) as conn:
         conn.execute("""
             CREATE TABLE ewelink_device_registry (
                 device_id TEXT PRIMARY KEY,
@@ -287,6 +288,7 @@ def test_sqlite_legacy_migration_and_mqtt_pair_endpoints(temp_db):
     prev_mock = settings.USE_MOCK_ENGINE
     prev_bridge = settings.ENABLE_HARDWARE_BRIDGE
     prev_mqtt = settings.MQTT_ENABLED
+    prev_map = settings.SONOFF_DEVICE_MAP
 
     import app.main as app_main
     prev_cm = app_main.context_mgr
@@ -296,6 +298,7 @@ def test_sqlite_legacy_migration_and_mqtt_pair_endpoints(temp_db):
     settings.USE_MOCK_ENGINE = True
     settings.ENABLE_HARDWARE_BRIDGE = False
     settings.MQTT_ENABLED = False
+    settings.SONOFF_DEVICE_MAP = {}
 
     try:
         with TestClient(app) as client:
@@ -332,3 +335,4 @@ def test_sqlite_legacy_migration_and_mqtt_pair_endpoints(temp_db):
         settings.USE_MOCK_ENGINE = prev_mock
         settings.ENABLE_HARDWARE_BRIDGE = prev_bridge
         settings.MQTT_ENABLED = prev_mqtt
+        settings.SONOFF_DEVICE_MAP = prev_map

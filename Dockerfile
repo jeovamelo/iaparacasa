@@ -33,6 +33,8 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    nodejs \
+    npm \
     libopenblas0 \
     sqlite3 \
     && rm -rf /var/lib/apt/lists/*
@@ -51,6 +53,8 @@ COPY .env.example /app/.env.example
 COPY app /app/app
 COPY scripts /app/scripts
 COPY tests /app/tests
+COPY package.json /app/package.json
+RUN npm install --omit=dev
 
 # Verificação de saúde embutida para Docker/Kubernetes
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \

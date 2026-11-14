@@ -1,249 +1,401 @@
 /* ==============================================================================
    iaparacasa - Frontend Client Logic (Vanilla JS, Zero Dependencies)
+   Layout: Tiles Quadrados por Canal (eWeLink Web) + Voz / Áudio (Speech API)
    ============================================================================== */
 
 let currentAcTemp = 23;
 let cachedDevices = [];
+let toastTimeout = null;
+let currentSearchFilter = "";
 
-// Inicialização
+// Controle de Voz / Áudio
+let speechRecognition = null;
+let isRecordingVoice = false;
+let voiceOutputEnabled = true;
+
 document.addEventListener("DOMContentLoaded", () => {
   updateDashboard();
   loadPreferences();
   setInterval(updateDashboard, 5000);
 });
 
+// Toast Notificação Flutuante Discreta
+function toast(message) {
+  const t = document.getElementById("toast-popup");
+  if (!t) return;
+  t.innerText = message;
+  t.style.display = "block";
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    t.style.display = "none";
+  }, 2400);
+}
+
+// Filtro de pesquisa rápida de interruptores
+function filterDevices(term) {
+  currentSearchFilter = (term || "").toLowerCase().trim();
+  renderSwitchTiles(cachedDevices);
+}
+
+// ==============================================================================
+// 1. Atualização e Renderização dos Interruptores em Quadrados (Tiles)
+// ==============================================================================
 async function updateDashboard() {
   try {
-    // 1. Atualiza Health & RAM
+    // 1. Health & Status
     const healthRes = await fetch("/health");
     if (healthRes.ok) {
       const h = await healthRes.json();
-      document.getElementById("badge-engine").innerText = `🧠 Engine: ${h.mock_mode ? 'Mock Heurístico' : h.model_name}`;
-      document.getElementById("badge-ram").innerText = `💾 RAM: ${h.ram_usage_mb} MB`;
-      document.getElementById("badge-status").innerText = `● Sistema Operacional`;
+      const eng = document.getElementById("badge-engine");
+      const ram = document.getElementById("badge-ram");
+      if (eng) eng.innerText = `🧠 ${h.mock_mode ? 'Mock Heurístico' : 'Qwen 2.5 1.5B'}`;
+      if (ram) ram.innerText = `💾 RAM: ${h.ram_usage_mb} MB`;
     }
 
-    // 2. Atualiza Telemetria
-    const telemRes = await fetch("/telemetry/recent");
-    if (telemRes.ok) {
-      const data = await telemRes.json();
-      if (data.sensor_temp_sala) {
-        document.getElementById("val-temp").innerText = `${data.sensor_temp_sala.value.toFixed(1)} °C`;
-      }
-      if (data.sensor_umidade_sala) {
-        document.getElementById("val-hum").innerText = `Umidade: ${data.sensor_umidade_sala.value.toFixed(0)}%`;
-      }
-      if (data.sensor_presenca_sala) {
-        const isMotion = data.sensor_presenca_sala.value > 0;
-        const motionElem = document.getElementById("val-motion");
-        motionElem.innerText = isMotion ? "Detectada" : "Ausente";
-        motionElem.style.color = isMotion ? "#3fb950" : "#8b949e";
-        document.getElementById("val-motion-time").innerText = isMotion ? "Movimento recente" : "Nenhum movimento";
-      }
-    }
-    // 3. Atualiza Status MQTT / Firmware Aberto
+    // 2. Status MQTT
     const mqttRes = await fetch("/mqtt/status");
     if (mqttRes.ok) {
       const m = await mqttRes.json();
       const mqttBadge = document.getElementById("badge-mqtt");
       if (mqttBadge) {
-        if (!m.enabled) {
-          mqttBadge.innerText = "📡 MQTT: Desativado";
-          mqttBadge.className = "badge badge-warning";
-        } else if (m.connected) {
-          mqttBadge.innerText = `📡 MQTT: Online (${m.open_firmware_devices_count || 0} OpenFW)`;
-          mqttBadge.className = "badge badge-success";
-        } else {
-          mqttBadge.innerText = `📡 MQTT: Aguardando ${m.broker_host}:${m.broker_port}`;
-          mqttBadge.className = "badge badge-warning";
-        }
+        mqttBadge.innerText = m.connected ? "📡 MQTT: Online" : "📡 MQTT: Conectando...";
       }
     }
 
-    // 4. Atualiza Dispositivos (Minha Casa) agrupados
+    // 3. Carregar e Renderizar Dispositivos
     const devsRes = await fetch("/ewelink/devices");
     if (devsRes.ok) {
       const devices = await devsRes.json();
       cachedDevices = devices;
-      renderEwelinkDevices(devices);
+      renderSwitchTiles(devices);
     }
   } catch (err) {
     console.warn("Falha ao atualizar dashboard:", err);
   }
 }
 
-function getDeviceIcon(dev) {
-  if (dev.device_type === "gate_pulse") return "🚪";
-  if (dev.device_type === "climate") return "❄️";
-  if ((dev.device_id || "").includes("jardim")) return "🌿";
-  return "💡";
-}
-
-function renderEwelinkDevices(devices) {
-  const container = document.getElementById("ewelink-device-groups");
+function renderSwitchTiles(devices) {
+  const container = document.getElementById("switches-container");
   if (!container) return;
 
-  const groupOrder = [
-    "Atuadores Locais",
-    "Grupo Casa",
-    "Grupo Externa",
-    "Tasmota / ESPHome",
-    "Tasmota MQTT",
-    "eWeLink LAN",
-    "eWeLink Cloud",
-  ];
   const visibleDevices = devices.filter(d => d.device_type !== "sensor");
 
-  const grouped = {};
-  for (const dev of visibleDevices) {
-    const grp = dev.group || "Atuadores Locais";
-    if (!grouped[grp]) grouped[grp] = [];
-    grouped[grp].push(dev);
+  // Nomes amigáveis para canais específicos
+  const channelNames = {
+    "chaves_de_seguranca": {
+      0: "Chaves Seg. (Canal 1)",
+      1: "Chaves Seg. (Canal 2)",
+      2: "Portão Garagem (Canal 3)",
+      3: "Chaves Seg. (Canal 4)"
+    },
+    "casa_de_maquinas": {
+      0: "Casa Máquinas (Canal 1)",
+      1: "Casa Máquinas (Canal 2)",
+      2: "Casa Máquinas (Canal 3)",
+      3: "Casa Máquinas (Canal 4)"
+    }
+  };
+
+  // Contadores para o topo
+  let onCount = 0;
+  let offCount = 0;
+
+  visibleDevices.forEach(d => {
+    const st = d.last_state || {};
+    if (d.is_multichannel && Array.isArray(st.switches)) {
+      st.switches.forEach(s => {
+        if (s.switch === "on") onCount++;
+        else offCount++;
+      });
+    } else {
+      if (st.switch === "on") onCount++;
+      else offCount++;
+    }
+  });
+
+  const onPill = document.getElementById("txt-on-count");
+  const offPill = document.getElementById("txt-off-count");
+  if (onPill) onPill.innerText = `${onCount} LIGADO`;
+  if (offPill) offPill.innerText = `${offCount} Desligados`;
+
+  // Mapeamento em Grupos (Externa, Controle & Segurança, Casa)
+  const groups = {
+    "Externa": [
+      "jardim_deck", "corredor_externo", "jardim_varanda",
+      "jardim_garagem", "jardim_principal", "refletor_da_entrada", "luz_da_frente"
+    ],
+    "Controle": [
+      "torneira", "fonte", "chaves_de_seguranca", "casa_de_maquinas", "portao_garagem"
+    ],
+    "Casa": [
+      "corredor_cima", "varanda_superior", "luz_sala", "ar_condicionado_sala"
+    ]
+  };
+
+  const devMap = {};
+  visibleDevices.forEach(d => { devMap[d.device_id] = d; });
+
+  // Adicionar grupo "Outros" se houver algum interruptor não mapeado nos grupos fixos
+  const mappedIds = new Set(Object.values(groups).flat());
+  const unmappedDevs = visibleDevices.filter(d => !mappedIds.has(d.device_id));
+  if (unmappedDevs.length > 0) {
+    groups["Outros"] = unmappedDevs.map(d => d.device_id);
   }
 
   let html = "";
-  for (const grp of groupOrder) {
-    const items = grouped[grp];
-    if (!items || items.length === 0) continue;
 
-    html += `<div class="device-group-header">${escapeHtml(grp)}</div>`;
-    for (const dev of items) {
-      const statusBadge = dev.online
-        ? `<span class="status-pill status-online">Online</span>`
-        : `<span class="status-pill status-offline">Offline</span>`;
-      const aesBadge = dev.lan_encryption_ready
-        ? `<span class="status-pill" style="background:rgba(56,139,253,0.16);color:#79c0ff;" title="Controle local LAN AES-128-CBC pronto">🔒 AES LAN</span>`
-        : "";
-      let fwBadge = "";
-      if (dev.firmware_type === "tasmota") {
-        fwBadge = `<span class="status-pill" style="background:rgba(219,109,40,0.2);color:#ffa657;" title="Tasmota MQTT / HTTP 100% Local">🟠 Tasmota</span>`;
-      } else if (dev.firmware_type === "esphome") {
-        fwBadge = `<span class="status-pill" style="background:rgba(46,160,67,0.2);color:#7ee787;" title="ESPHome MQTT / REST Local">🟢 ESPHome</span>`;
-      } else if (dev.firmware_type === "mqtt_json") {
-        fwBadge = `<span class="status-pill" style="background:rgba(163,113,247,0.2);color:#d2a8ff;" title="MQTT JSON Genérico">📡 MQTT</span>`;
-      }
+  for (const [groupTitle, devIds] of Object.entries(groups)) {
+    const groupItems = [];
+    for (const id of devIds) {
+      if (devMap[id]) groupItems.push(devMap[id]);
+    }
+
+    if (groupItems.length === 0) continue;
+
+    let groupHtml = "";
+
+    for (const dev of groupItems) {
       const state = dev.last_state || {};
+      const isMulti = Boolean(dev.is_multichannel || (Array.isArray(state.switches) && state.switches.length > 1));
 
-      let subText = dev.model_hint || dev.device_id;
-      let controlsHtml = "";
+      // Se for dispositivo de 4 canais, renderiza 4 quadrados independentes!
+      if (isMulti && Array.isArray(state.switches) && state.switches.length > 0) {
+        state.switches.forEach(sw => {
+          const outlet = sw.outlet;
+          const isOutletOn = sw.switch === "on";
+          const customName = (channelNames[dev.device_id] && channelNames[dev.device_id][outlet])
+            ? channelNames[dev.device_id][outlet]
+            : `${dev.name} (Canal ${outlet + 1})`;
 
-      if (dev.device_type === "gate_pulse") {
-        subText = `${dev.model_hint || "Contato Seco"} • ID: ${dev.device_id}`;
-        controlsHtml = `<button class="btn btn-pulse" onclick="triggerGatePulse('${dev.device_id}', this)">⚡ Pulso 1s</button>`;
-      } else if (dev.device_type === "climate") {
-        const temp = state.temperature || currentAcTemp;
-        currentAcTemp = temp;
-        const switchState = state.switch === "on" ? "Ligado" : "Desligado";
-        subText = `Estado: ${switchState} • ${temp}°C (${state.mode || "cool"})`;
-        controlsHtml = `
-          <div class="switch-group">
-            <button class="btn btn-temp" onclick="adjustTemp(-1)">-1°C</button>
-            <button class="btn btn-temp" onclick="adjustTemp(1)">+1°C</button>
-            <button class="btn btn-on" onclick="controlDevice('${dev.device_id}', 'set_state', {temperature: ${temp}, mode: 'cool'})">Ligar</button>
-            <button class="btn btn-off" onclick="controlDevice('${dev.device_id}', 'power_off')">Off</button>
-          </div>
-        `;
-      } else {
-        const switchState = state.switch === "on" ? "Ligado" : "Desligado";
-        subText = `${dev.model_hint || "Sonoff Switch"} • ${switchState}`;
-        controlsHtml = `
-          <div class="switch-group">
-            <button class="btn btn-on" onclick="controlDevice('${dev.device_id}', 'power_on')">Ligar</button>
-            <button class="btn btn-off" onclick="controlDevice('${dev.device_id}', 'power_off')">Desligar</button>
-          </div>
-        `;
+          const isGateChannel = (dev.device_id === "chaves_de_seguranca" && outlet === 2);
+
+          // Filtro de busca
+          if (currentSearchFilter &&
+              !customName.toLowerCase().includes(currentSearchFilter) &&
+              !dev.device_id.toLowerCase().includes(currentSearchFilter)) {
+            return;
+          }
+
+          let tileClass = `switch-tile ${isOutletOn ? "is-on" : "is-off"} ${isGateChannel ? "is-gate" : ""} ${dev.online ? "is-online" : "is-offline"}`;
+          let wifiSvg = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 4C7.31 4 3.07 5.9 0 8.98L12 21 24 8.98C20.93 5.9 16.69 4 12 4zm0 3.3c3.81 0 7.27 1.48 9.87 3.93L12 18.9 2.13 11.23C4.73 8.78 8.19 7.3 12 7.3z"/></svg>`;
+
+          let iconSvg = isGateChannel
+            ? `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M19 19V5c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v14H3v2h18v-2h-2zm-8-6H9v-2h2v2z"/></svg>`
+            : `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M16 7V3h-2v4h-4V3H8v4c-1.1 0-2 .9-2 2v6c0 3.31 2.69 6 6 6s6-2.69 6-6V9c0-1.1-.9-2-2-2zm0 8c0 2.21-1.79 4-4 4s-4-1.79-4-4V9h8v6z"/></svg>`;
+
+          let stateText = isGateChannel
+            ? `<button class="btn-gate-pulse" onclick="event.stopPropagation(); triggerGatePulse('${dev.device_id}', this)">⚡ Pulso 1s</button>`
+            : `<span class="switch-tile-state-label">${isOutletOn ? "Ligar" : "Desligar"}</span>`;
+
+          let clickHandler = isGateChannel
+            ? `triggerGatePulse('${dev.device_id}', this)`
+            : `toggleSwitchChannel('${dev.device_id}', ${outlet}, ${isOutletOn})`;
+
+          groupHtml += `
+            <div class="${tileClass}" onclick="${clickHandler}" title="Clique para alternar ${escapeHtml(customName)}">
+              <div class="switch-tile-wifi">${wifiSvg}</div>
+              <div class="switch-tile-icon-bubble">${iconSvg}</div>
+              <div class="switch-tile-name">${escapeHtml(customName)}</div>
+              <div>${stateText}</div>
+            </div>
+          `;
+        });
+        continue;
       }
 
-      html += `
-        <div class="device-item">
-          <div class="device-info">
-            <span class="device-icon">${getDeviceIcon(dev)}</span>
-            <div>
-              <strong>${escapeHtml(dev.name)}</strong>${statusBadge}${fwBadge}${aesBadge}
-              <p class="device-sub">${escapeHtml(subText)}</p>
-            </div>
-          </div>
-          ${controlsHtml}
+      // Dispositivos de 1 canal padrão
+      const isOn = state.switch === "on";
+      const isGate = dev.device_type === "gate_pulse" || dev.device_id === "portao_garagem";
+
+      // Filtro de busca
+      if (currentSearchFilter &&
+          !(dev.name || "").toLowerCase().includes(currentSearchFilter) &&
+          !dev.device_id.toLowerCase().includes(currentSearchFilter)) {
+        return;
+      }
+
+      let tileClass = `switch-tile ${isOn ? "is-on" : "is-off"} ${isGate ? "is-gate" : ""} ${dev.online ? "is-online" : "is-offline"}`;
+      let wifiSvg = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 4C7.31 4 3.07 5.9 0 8.98L12 21 24 8.98C20.93 5.9 16.69 4 12 4zm0 3.3c3.81 0 7.27 1.48 9.87 3.93L12 18.9 2.13 11.23C4.73 8.78 8.19 7.3 12 7.3z"/></svg>`;
+
+      let iconSvg = isGate
+        ? `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M19 19V5c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v14H3v2h18v-2h-2zm-8-6H9v-2h2v2z"/></svg>`
+        : `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M16 7V3h-2v4h-4V3H8v4c-1.1 0-2 .9-2 2v6c0 3.31 2.69 6 6 6s6-2.69 6-6V9c0-1.1-.9-2-2-2zm0 8c0 2.21-1.79 4-4 4s-4-1.79-4-4V9h8v6z"/></svg>`;
+
+      let stateText = isGate
+        ? `<button class="btn-gate-pulse" onclick="event.stopPropagation(); triggerGatePulse('${dev.device_id}', this)">⚡ Pulso 1s</button>`
+        : `<span class="switch-tile-state-label">${isOn ? "Ligar" : "Desligar"}</span>`;
+
+      let clickHandler = isGate
+        ? `triggerGatePulse('${dev.device_id}', this)`
+        : `toggleSwitch('${dev.device_id}', ${isOn})`;
+
+      groupHtml += `
+        <div class="${tileClass}" onclick="${clickHandler}" title="Clique para alternar ${escapeHtml(dev.name)}">
+          <div class="switch-tile-wifi">${wifiSvg}</div>
+          <div class="switch-tile-icon-bubble">${iconSvg}</div>
+          <div class="switch-tile-name">${escapeHtml(dev.name)}</div>
+          <div>${stateText}</div>
         </div>
       `;
     }
+
+    if (groupHtml) {
+      html += `<section class="section-group">`;
+      html += `<h2 class="section-group-title">${escapeHtml(groupTitle)}</h2>`;
+      html += `<div class="switch-tiles-grid">${groupHtml}</div>`;
+      html += `</section>`;
+    }
   }
 
-  container.innerHTML = html || `<div class="empty-state">Nenhum dispositivo cadastrado.</div>`;
+  container.innerHTML = html || `<div class="empty-state">Nenhum interruptor encontrado com o filtro atual.</div>`;
+}
+
+function bool(val) {
+  return Boolean(val);
+}
+
+// Alternar liga/desliga de interruptor simples de 1 canal
+async function toggleSwitch(deviceId, currentIsOn) {
+  const nextCommand = currentIsOn ? "power_off" : "power_on";
+  const dev = cachedDevices.find(d => d.device_id === deviceId);
+  const devName = dev ? dev.name : deviceId;
+
+  toast(`⏳ Enviando comando para ${devName}...`);
+
+  try {
+    const response = await fetch(`/ewelink/control?target_device=${encodeURIComponent(deviceId)}&command=${encodeURIComponent(nextCommand)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    const result = await response.json();
+
+    if (response.ok && result.success !== false) {
+      toast(`✔ ${devName} ${nextCommand === "power_on" ? "ligado" : "desligado"} com sucesso!`);
+      if (dev && dev.last_state) {
+        dev.last_state.switch = nextCommand === "power_on" ? "on" : "off";
+        renderSwitchTiles(cachedDevices);
+      }
+    } else {
+      const errDetail = result.details || result.detail || "Erro no controlador";
+      toast(`Aviso: ${typeof errDetail === "object" ? JSON.stringify(errDetail) : errDetail}`);
+    }
+    updateDashboard();
+  } catch (error) {
+    toast(`Falha de conexão com ${devName}`);
+  }
+}
+
+// Alternar canal específico de um dispositivo de múltiplos canais (4CH)
+async function toggleSwitchChannel(deviceId, outlet, currentIsOn) {
+  const nextCommand = currentIsOn ? "power_off" : "power_on";
+  const dev = cachedDevices.find(d => d.device_id === deviceId);
+  const devName = dev ? dev.name : deviceId;
+
+  toast(`⏳ Acionando ${devName} (Canal ${outlet + 1})...`);
+
+  try {
+    const response = await fetch(`/ewelink/control?target_device=${encodeURIComponent(deviceId)}&command=${encodeURIComponent(nextCommand)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outlet: outlet })
+    });
+
+    const result = await response.json();
+
+    if (response.ok && result.success !== false) {
+      toast(`✔ ${devName} Canal ${outlet + 1} ${nextCommand === "power_on" ? "ligado" : "desligado"}!`);
+      if (dev && dev.last_state && Array.isArray(dev.last_state.switches)) {
+        const sw = dev.last_state.switches.find(s => s.outlet === outlet);
+        if (sw) sw.switch = nextCommand === "power_on" ? "on" : "off";
+        renderSwitchTiles(cachedDevices);
+      }
+    } else {
+      const errDetail = result.details || result.detail || "Erro no controlador";
+      toast(`Aviso: ${typeof errDetail === "object" ? JSON.stringify(errDetail) : errDetail}`);
+    }
+    updateDashboard();
+  } catch (error) {
+    toast(`Falha de conexão com ${devName}`);
+  }
+}
+
+// Acionamento com pulso estrito de 1000ms para o Portão
+async function triggerGatePulse(deviceId = "portao_garagem", btnEl = null) {
+  const orig = btnEl ? btnEl.innerText : "⚡ Pulso 1s";
+  if (btnEl) btnEl.innerText = "⏳...";
+  toast("🚪 Acionando portão da garagem (pulso de 1s)...");
+
+  try {
+    const response = await fetch(`/ewelink/control?target_device=${encodeURIComponent(deviceId)}&command=pulse`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pulse_duration_ms: 1000, outlet: 2 })
+    });
+    const result = await response.json();
+    if (response.ok && result.success !== false) {
+      toast("✔ Portão acionado com segurança!");
+    } else {
+      toast("Aviso no acionamento do portão.");
+    }
+    updateDashboard();
+  } catch (err) {
+    toast("Falha de conexão com o portão.");
+  } finally {
+    if (btnEl) setTimeout(() => { btnEl.innerText = orig; }, 1000);
+  }
 }
 
 async function syncEwelinkDevices() {
   const btn = document.getElementById("btn-sync");
-  const statusEl = document.getElementById("sync-status-text");
-  if (btn) btn.innerText = "⏳ Sincronizando...";
+  if (btn) btn.style.opacity = "0.5";
+  toast("🔄 Sincronizando dispositivos...");
   try {
     const res = await fetch("/ewelink/sync", { method: "POST" });
     if (res.ok) {
       const data = await res.json();
-      if (statusEl) {
-        statusEl.innerText = data.cloud_configured
-          ? `☁️ Nuvem sincronizada (${data.synced_count} dispositivos atualizados)`
-          : `📡 LAN Local ativa (${data.total_devices} dispositivos) — configure AppID/Token no .env para nuvem`;
+      if (data.devices) {
+        cachedDevices = data.devices;
+        renderSwitchTiles(cachedDevices);
       }
-      if (data.devices) renderEwelinkDevices(data.devices);
+      toast(`✔ ${data.total_devices || 11} dispositivos sincronizados!`);
     }
   } catch (err) {
-    console.error("Erro na sincronização eWeLink:", err);
+    toast("Falha na sincronização.");
   } finally {
-    if (btn) btn.innerText = "↻ Sincronizar";
+    if (btn) btn.style.opacity = "1";
   }
 }
 
-async function loadPreferences() {
-  try {
-    const res = await fetch("/preferences");
-    if (!res.ok) return;
-    const prefs = await res.json();
-    document.getElementById("count-prefs").innerText = `${prefs.length} Hábitos`;
-
-    const list = document.getElementById("preferences-list");
-    if (prefs.length === 0) {
-      list.innerHTML = `<div class="empty-state">Nenhum hábito específico salvo ainda.</div>`;
-      return;
-    }
-
-    list.innerHTML = prefs.map(p => `
-      <div class="pref-item">
-        <div>
-          <div class="pref-text"><strong>[${p.category.toUpperCase()}]</strong> ${escapeHtml(p.preference_rule)}</div>
-          <div class="pref-meta">
-            <span>Dispositivo: <code>${p.target_device}</code></span>
-            <span>Confiança: ${(p.confidence * 100).toFixed(0)}%</span>
-            <span>Reforçado: ${p.times_reinforced}x</span>
-          </div>
-        </div>
-        <button class="btn-del" onclick="deletePreference(${p.id})" title="Remover hábito">&times;</button>
-      </div>
-    `).join("");
-  } catch (err) {
-    console.error("Erro ao carregar preferências:", err);
-  }
-}
-
-async function deletePreference(id) {
-  if (!confirm("Deseja realmente remover este hábito aprendido?")) return;
-  try {
-    const res = await fetch(`/preferences/${id}`, { method: "DELETE" });
-    if (res.ok) {
-      loadPreferences();
-    }
-  } catch (e) {
-    alert("Erro ao excluir preferência: " + e);
-  }
-}
-
+// ==============================================================================
+// 2. Chat com Edge AI (Qwen 2.5 1.5B) - 100% Linguagem Natural e Síntese de Voz
+// ==============================================================================
 function sendPrompt(text) {
-  document.getElementById("chat-input").value = text;
+  const input = document.getElementById("chat-input");
+  if (input) input.value = text;
   submitChat();
+}
+
+function clearChat() {
+  const box = document.getElementById("chat-messages");
+  if (!box) return;
+  box.innerHTML = `
+    <div class="chat-bubble bubble-assistant">
+      <div class="bubble-header">
+        <strong>iaparacasa</strong>
+        <span class="bubble-time">Agora</span>
+      </div>
+      <div class="bubble-content">
+        Conversa reiniciada. Em que posso ajudar você agora?
+      </div>
+    </div>
+  `;
 }
 
 async function submitChat() {
   const input = document.getElementById("chat-input");
+  if (!input) return;
   const prompt = input.value.trim();
   if (!prompt) return;
 
@@ -251,8 +403,7 @@ async function submitChat() {
   appendUserMessage(prompt);
 
   const sendBtn = document.getElementById("btn-send");
-  sendBtn.disabled = true;
-  sendBtn.innerText = "...";
+  if (sendBtn) sendBtn.disabled = true;
 
   try {
     const res = await fetch("/chat", {
@@ -264,32 +415,29 @@ async function submitChat() {
       })
     });
 
-    if (!res.ok) throw new Error("Erro na resposta da API");
+    if (!res.ok) throw new Error("Erro na resposta do assistente");
     const data = await res.json();
     appendAssistantMessage(data);
 
-    // Se o modelo aprendeu nova preferência, atualiza tabela
-    if (data.decision.learned_preference) {
+    if (data.decision && data.decision.learned_preference) {
       setTimeout(loadPreferences, 500);
     }
     updateDashboard();
   } catch (err) {
     appendAssistantMessage({
       decision: {
-        response_text: "Desculpe, ocorreu um erro de conexão com o motor de automação."
+        response_text: "Desculpe, tive uma instabilidade temporária ao processar a instrução."
       },
-      interaction_id: null,
-      applied_preferences: [],
-      latency_ms: 0
+      interaction_id: null
     });
   } finally {
-    sendBtn.disabled = false;
-    sendBtn.innerText = "Enviar";
+    if (sendBtn) sendBtn.disabled = false;
   }
 }
 
 function appendUserMessage(text) {
   const box = document.getElementById("chat-messages");
+  if (!box) return;
   const div = document.createElement("div");
   div.className = "chat-bubble bubble-user";
   div.innerHTML = `
@@ -300,51 +448,42 @@ function appendUserMessage(text) {
   box.scrollTop = box.scrollHeight;
 }
 
+// Renderiza a resposta do assistente APENAS com texto em linguagem natural
 function appendAssistantMessage(data) {
   const box = document.getElementById("chat-messages");
+  if (!box) return;
   const div = document.createElement("div");
   div.className = "chat-bubble bubble-assistant";
 
   const dec = data.decision || {};
   const interactionId = data.interaction_id;
-  const latency = data.latency_ms ? `${data.latency_ms.toFixed(1)}ms` : "";
+  const responseText = dec.response_text || "Comando executado com sucesso.";
 
-  let appliedHtml = "";
-  if (data.applied_preferences && data.applied_preferences.length > 0) {
-    appliedHtml = `<div style="font-size: 10px; color: #a371f7; margin-top: 4px;">🎯 Hábito Aplicado: ${escapeHtml(data.applied_preferences[0])}</div>`;
-  }
+  // Síntese de Voz (Lê em voz alta se ativado)
+  speakText(responseText);
 
+  // Feedback sutil para aprendizado
   let feedbackHtml = "";
   if (interactionId) {
     feedbackHtml = `
-      <div class="bubble-feedback-bar" id="fb-bar-${interactionId}">
-        <span>A decisão foi correta?</span>
-        <button class="btn-fb" onclick="sendFeedback(${interactionId}, true)">👍 Sim</button>
-        <button class="btn-fb" onclick="openCorrectionModal(${interactionId})">👎 Corrigir</button>
+      <div style="display:flex;gap:10px;margin-top:6px;font-size:11px;" id="fb-bar-${interactionId}">
+        <span style="color:#64748b;">Foi útil?</span>
+        <button style="border:none;background:none;color:#10b981;cursor:pointer;font-weight:600;" onclick="sendFeedback(${interactionId}, true)">👍 Sim</button>
+        <button style="border:none;background:none;color:#f59e0b;cursor:pointer;font-weight:600;" onclick="openCorrectionModal(${interactionId})">👎 Ensinar</button>
       </div>
     `;
   }
 
-  const ewelinkJson = data.ewelink_command
-    ? JSON.stringify(data.ewelink_command, null, 2)
-    : JSON.stringify({
-        integration: "ewelink",
-        action: dec.command === "pulse" ? "pulse_inching" : "set_device_status",
-        target_device: dec.target_device,
-        params: dec.params || {}
-      }, null, 2);
-
+  // Apenas linguagem natural humana; SEM BLOCO JSON DE COMANDO
   div.innerHTML = `
     <div class="bubble-header">
-      <strong>🤖 iaparacasa</strong>
-      <span class="bubble-time">${latency}</span>
+      <strong>iaparacasa</strong>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button class="btn-bubble-audio" onclick="speakText(decodeURIComponent('${encodeURIComponent(responseText)}'))" title="Ouvir resposta em voz alta">🔊</button>
+        <span class="bubble-time">Agora</span>
+      </div>
     </div>
-    <div class="bubble-content">${escapeHtml(dec.response_text || "")}</div>
-    ${appliedHtml}
-    <div class="bubble-decision-box">
-      <strong>Bloco eWeLink JSON:</strong>
-      <pre>${escapeHtml(ewelinkJson)}</pre>
-    </div>
+    <div class="bubble-content">${escapeHtml(responseText)}</div>
     ${feedbackHtml}
   `;
 
@@ -352,6 +491,170 @@ function appendAssistantMessage(data) {
   box.scrollTop = box.scrollHeight;
 }
 
+// ==============================================================================
+// 3. Web Speech API (Reconhecimento de Voz e Síntese de Fala)
+// ==============================================================================
+function initSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    console.warn("Reconhecimento de fala não suportado neste navegador.");
+    return null;
+  }
+  const recog = new SpeechRecognition();
+  recog.lang = "pt-BR";
+  recog.continuous = false;
+  recog.interimResults = false;
+
+  recog.onstart = () => {
+    isRecordingVoice = true;
+    const btn = document.getElementById("btn-mic");
+    if (btn) btn.classList.add("is-recording");
+    toast("🎙️ Ouvindo... Fale agora");
+  };
+
+  recog.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+    const input = document.getElementById("chat-input");
+    if (input) input.value = transcript;
+    toast(`🗣️ Reconhecido: "${transcript}"`);
+    submitChat();
+  };
+
+  recog.onerror = (event) => {
+    console.warn("Erro no microfone:", event.error);
+    isRecordingVoice = false;
+    const btn = document.getElementById("btn-mic");
+    if (btn) btn.classList.remove("is-recording");
+
+    if (event.error === "not-allowed") {
+      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+      if (!isLocal && window.location.protocol !== "https:") {
+        toast("⚠️ Microfone bloqueado por HTTP de rede. Acesse por http://localhost:8001 para liberar!");
+      } else {
+        toast("⚠️ Permissão de microfone negada. Clique no ícone ao lado do endereço e permita o Microfone.");
+      }
+    } else if (event.error !== "no-speech") {
+      toast(`Microfone: ${event.error}`);
+    }
+  };
+
+  recog.onend = () => {
+    isRecordingVoice = false;
+    const btn = document.getElementById("btn-mic");
+    if (btn) btn.classList.remove("is-recording");
+  };
+
+  return recog;
+}
+
+async function toggleVoiceRecording() {
+  const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+
+  if (!isLocal && window.location.protocol !== "https:") {
+    console.warn("Navegador acessando via IP de rede sem HTTPS; microfone pode requerer localhost ou permissão explícita.");
+  }
+
+  if (!speechRecognition) {
+    speechRecognition = initSpeechRecognition();
+  }
+  if (!speechRecognition) {
+    toast("Reconhecimento de voz não suportado pelo navegador atual. Use Google Chrome ou Edge.");
+    return;
+  }
+
+  if (isRecordingVoice) {
+    speechRecognition.stop();
+  } else {
+    // Tenta solicitar permissão explicitamente via getUserMedia caso o navegador suporte
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+      } catch (err) {
+        if (!isLocal && window.location.protocol !== "https:") {
+          toast("⚠️ Acesse via http://localhost:8001 para o Chrome liberar o microfone!");
+        } else {
+          toast("⚠️ Permissão de microfone negada. Permita o microfone no ícone ao lado do endereço.");
+        }
+        return;
+      }
+    }
+
+    try {
+      speechRecognition.start();
+    } catch (e) {
+      try { speechRecognition.stop(); } catch(_) {}
+    }
+  }
+}
+
+// Cache e seleção de vozes pt-BR
+let cachedVoices = [];
+if (typeof window !== "undefined" && window.speechSynthesis) {
+  const loadVoices = () => {
+    cachedVoices = window.speechSynthesis.getVoices() || [];
+  };
+  loadVoices();
+  window.speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+function getPtBrVoice() {
+  if (!window.speechSynthesis) return null;
+  const voices = cachedVoices.length > 0 ? cachedVoices : window.speechSynthesis.getVoices();
+  if (!voices || voices.length === 0) return null;
+
+  const ptVoices = voices.filter(v => (v.lang || "").toLowerCase().includes("pt"));
+  if (ptVoices.length === 0) return null;
+
+  // Prioriza vozes naturais brasileiras
+  const naturalBr = ptVoices.find(v => 
+    (v.lang === "pt-BR" || v.lang === "pt_BR") &&
+    (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Francisca") || v.name.includes("Antonio") || v.name.includes("Maria"))
+  );
+  if (naturalBr) return naturalBr;
+
+  const anyBr = ptVoices.find(v => (v.lang === "pt-BR" || v.lang === "pt_BR"));
+  return anyBr || ptVoices[0];
+}
+
+function toggleVoiceOutput() {
+  voiceOutputEnabled = !voiceOutputEnabled;
+  const icon = document.getElementById("voice-icon");
+  if (icon) icon.innerText = voiceOutputEnabled ? "🔊" : "🔇";
+  toast(`Leitura em voz alta ${voiceOutputEnabled ? "ativada" : "desativada"}`);
+  if (!voiceOutputEnabled && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  } else if (voiceOutputEnabled) {
+    speakText("Voz ativada. Agora posso responder em áudio.");
+  }
+}
+
+function speakText(text) {
+  if (!voiceOutputEnabled || !window.speechSynthesis) return;
+  try {
+    window.speechSynthesis.cancel();
+    const clean = String(text || "").replace(/[*#`_]/g, "").trim();
+    if (!clean) return;
+
+    const utterance = new SpeechSynthesisUtterance(clean);
+    utterance.lang = "pt-BR";
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+
+    const voice = getPtBrVoice();
+    if (voice) {
+      utterance.voice = voice;
+    }
+
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.warn("Erro ao reproduzir áudio:", err);
+  }
+}
+
+// ==============================================================================
+// 4. Modais e Preferências
+// ==============================================================================
 async function sendFeedback(interactionId, approved) {
   try {
     const res = await fetch("/feedback", {
@@ -364,31 +667,32 @@ async function sendFeedback(interactionId, approved) {
     });
     if (res.ok) {
       const bar = document.getElementById(`fb-bar-${interactionId}`);
-      if (bar) bar.innerHTML = `<span style="color: #3fb950;">✔ Feedback gravado! Hábito reforçado na memória.</span>`;
+      if (bar) bar.innerHTML = `<span style="color:#10b981;font-size:11px;">✔ Feedback registrado!</span>`;
       loadPreferences();
     }
   } catch (err) {
-    alert("Erro ao enviar feedback: " + err);
+    console.error(err);
   }
 }
 
 function openCorrectionModal(interactionId) {
-  document.getElementById("modal-interaction-id").value = interactionId;
-  document.getElementById("modal-correction").value = "";
-  document.getElementById("feedback-modal").style.display = "flex";
+  const idEl = document.getElementById("modal-interaction-id");
+  const corrEl = document.getElementById("modal-correction");
+  const modalEl = document.getElementById("feedback-modal");
+  if (idEl) idEl.value = interactionId;
+  if (corrEl) corrEl.value = "";
+  if (modalEl) modalEl.style.display = "flex";
 }
 
 function closeFeedbackModal() {
-  document.getElementById("feedback-modal").style.display = "none";
+  const modalEl = document.getElementById("feedback-modal");
+  if (modalEl) modalEl.style.display = "none";
 }
 
 async function submitCorrection() {
   const interactionId = parseInt(document.getElementById("modal-interaction-id").value);
   const text = document.getElementById("modal-correction").value.trim();
-  if (!text) {
-    alert("Por favor descreva a correção.");
-    return;
-  }
+  if (!text) return;
 
   try {
     const res = await fetch("/feedback", {
@@ -404,69 +708,20 @@ async function submitCorrection() {
 
     if (res.ok) {
       closeFeedbackModal();
-      const bar = document.getElementById(`fb-bar-${interactionId}`);
-      if (bar) bar.innerHTML = `<span style="color: #e3b341;">✔ Correção aprendida! Salva no SQLite.</span>`;
+      toast("Regra ensinada com sucesso à inteligência!");
       loadPreferences();
     }
   } catch (err) {
-    alert("Erro ao salvar correção: " + err);
+    alert("Erro: " + err);
   }
 }
 
-// Controles Físicos Diretos (Gateway eWeLink Dual-Mode)
-async function triggerGatePulse(deviceId = "portao_garagem", btnEl = null) {
-  const originalText = btnEl ? btnEl.innerText : "⚡ Pulso 1s";
-  if (btnEl) {
-    btnEl.innerText = "⏳ Pulso 1s...";
-    btnEl.style.background = "rgba(46, 160, 67, 0.4)";
-  }
-
+async function loadPreferences() {
   try {
-    await fetch(`/ewelink/control?target_device=${encodeURIComponent(deviceId)}&command=pulse`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pulse_duration_ms: 1000 })
-    });
-    updateDashboard();
-  } finally {
-    if (btnEl) {
-      setTimeout(() => {
-        btnEl.innerText = originalText;
-        btnEl.style.background = "";
-      }, 1000);
-    }
-  }
+    await fetch("/preferences");
+  } catch (e) {}
 }
 
-async function controlDevice(deviceId, command, params = null) {
-  await fetch(`/ewelink/control?target_device=${encodeURIComponent(deviceId)}&command=${encodeURIComponent(command)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params || {})
-  });
-  updateDashboard();
-}
-
-async function adjustTemp(delta) {
-  currentAcTemp += delta;
-  await controlDevice("ar_condicionado_sala", "set_state", { temperature: currentAcTemp, mode: "cool" });
-}
-
-async function simulateTelemetry(temp, motion) {
-  await fetch("/telemetry", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device_id: "sensor_temp_sala", metric: "temperature", value: temp, unit: "C" })
-  });
-  await fetch("/telemetry", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device_id: "sensor_presenca_sala", metric: "motion", value: motion, unit: "detected" })
-  });
-  updateDashboard();
-}
-
-// Modal de Configuração MQTT / Tasmota / ESPHome
 function openMqttModal() {
   const selectEl = document.getElementById("mqtt-device-select");
   if (!selectEl) return;
@@ -521,16 +776,11 @@ async function saveMqttDeviceConfig() {
     });
     if (res.ok) {
       closeMqttModal();
-      const statusEl = document.getElementById("sync-status-text");
-      if (statusEl) {
-        statusEl.innerText = `✔ ${targetDevice} configurado como ${firmwareType.toUpperCase()} (${mqttTopic || targetDevice})`;
-      }
+      toast(`✔ ${targetDevice} configurado!`);
       updateDashboard();
-    } else {
-      alert("Falha ao salvar configuração MQTT.");
     }
   } catch (err) {
-    alert("Erro ao conectar à API: " + err);
+    alert("Erro: " + err);
   }
 }
 
@@ -542,4 +792,3 @@ function escapeHtml(text) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
-

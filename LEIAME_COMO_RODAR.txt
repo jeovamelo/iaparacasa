@@ -1,0 +1,43 @@
+==============================================================================
+                    IAPARACASA 2 - GUIA DE INSTALAÇÃO RÁPIDA
+==============================================================================
+
+Este pacote contém tudo o que você precisa para rodar o sistema iaparacasa2
+em qualquer outra máquina (Windows, Linux ou Mac) que possua o Docker instalado.
+
+CONTEÚDO DESTA PASTA:
+---------------------
+1. iaparacasa2_image.tar  -> As imagens do Docker (iaparacasa2 + Mosquitto MQTT).
+2. models/                -> O modelo de IA local (Qwen 2.5 1.5B GGUF).
+3. data2/                 -> Banco de dados SQLite persistido e configs do MQTT.
+4. .env                   -> Credenciais e mapeamento de IPs locais dos Sonoff.
+5. docker-compose.yml     -> Arquivo de orquestração dos contêineres.
+6. iniciar_em_outra_maquina.bat -> Script automático de 1 clique.
+7. exportar_iaparacasa2.bat     -> Script para re-exportar quando quiser.
+
+COMO RODAR NA NOVA MÁQUINA:
+---------------------------
+Passo 1: Instale o Docker Desktop na nova máquina (se ainda não tiver)
+         e certifique-se de que ele está aberto e rodando.
+
+Passo 2: Copie esta pasta inteira para a nova máquina.
+
+Passo 3: Dê dois cliques no arquivo:
+         👉 iniciar_em_outra_maquina.bat
+
+         O script vai automaticamente:
+         - Carregar a imagem no Docker (`docker load -i iaparacasa2_image.tar`).
+         - Subir os contêineres com suas configurações e volumes.
+
+Passo 4: Abra o navegador e acesse:
+         👉 http://localhost:8001
+
+DICAS ÚTEIS:
+------------
+- O modelo leva cerca de 40 a 50 segundos no primeiro boot para carregar
+  os pesos neurais na memória RAM (cerca de 1,28 GB de RAM).
+- Para parar os contêineres:
+    docker compose down
+- Para ver o log em tempo real:
+    docker logs -f iaparacasa2-edge
+==============================================================================

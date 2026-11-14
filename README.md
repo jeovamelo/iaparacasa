@@ -99,7 +99,7 @@ Para permitir que a casa aprenda hábitos sem o custo computacional e os riscos 
 
 Toda inferência do modelo resulta estritamente na seguinte estrutura:
 
-```json
+````json
 {
   "action": "execute",
   "target_device": "sonoff_rele_portao",
@@ -141,7 +141,7 @@ O payload de saída é diretamente conversível para os padrões de gateways res
 Para relés Sonoff Mini / Basic R3 operando na rede local sem depender da nuvem:
 - O módulo `app/ewelink_gateway.py` utiliza o protocolo **ZeroConf / mDNS (`_ewelink._tcp.local.`)** para descobrir automaticamente os dispositivos Sonoff conectados à sub-rede local, dispensando fixação manual de IPs.
 - O acionamento local ocorre via HTTP REST na porta `8081`:
-```bash
+````bash
 # Exemplo gerado automaticamente para o comando 'pulse' (Inching 1000ms):
 curl -X POST http://192.168.1.150:8081/zeroconf/pulse \
      -H "Content-Type: application/json" \
@@ -162,7 +162,7 @@ Acesse diretamente pelo navegador em `http://localhost:8000/` ou `http://localho
 
 ### 5.4 Modo MQTT / Home Assistant / Tasmota
 O método `to_gateway_payload()` formata mensagens para tópicos MQTT padrão:
-```json
+````json
 // Tópico: cmnd/sonoff_rele_portao/pulse
 {"pulse": "on", "pulseWidth": 1000}
 
@@ -221,14 +221,14 @@ iaparacasa/
 ## 7. Guia Passo a Passo: Inicialização e Teste
 
 ### Passo 1: Clonar o Repositório e Configurar o Ambiente
-```bash
+````bash
 # Copie o arquivo de variáveis de ambiente
 cp .env.example .env
 ```
 
 ### Passo 2: Baixar o Modelo Quantizado GGUF
 Execute o script utilitário para baixar o modelo `Qwen2.5-1.5B-Instruct-Q4_K_M.gguf` diretamente do Hugging Face:
-```bash
+````bash
 python scripts/download_model.py
 ```
 *(Opcional: Caso seu dispositivo tenha 4GB+ de RAM e queira a versão 3B, execute `python scripts/download_model.py --use-3b`)*.
@@ -236,7 +236,7 @@ python scripts/download_model.py
 > **Nota**: O sistema possui um motor heurístico inteligente (*Mock Engine*). Se você inicializar a aplicação antes de concluir o download do arquivo de 1GB, ela subirá normalmente para testes imediatos sem falhar!
 
 ### Passo 3: Executar via Docker Compose (Recomendado)
-```bash
+````bash
 # Constrói a imagem e sobe o microservice com teto de 2.5GB de RAM
 docker-compose up -d --build
 
@@ -245,14 +245,14 @@ docker-compose logs -f iaparacasa
 ```
 
 Ou execute localmente com Python:
-```bash
+````bash
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Passo 4: Executar o Ciclo de Teste Automatizado End-to-End
 Com o serviço rodando, execute o script de validação de ciclo completo:
-```bash
+````bash
 python scripts/test_cycle.py
 ```
 
@@ -269,7 +269,7 @@ O script validará:
 ## 8. Exemplos Práticos de Interação com a API
 
 ### 8.1 Enviar Telemetria de Sensores
-```bash
+````bash
 curl -X POST http://localhost:8000/telemetry \
      -H "Content-Type: application/json" \
      -d '{
@@ -281,7 +281,7 @@ curl -X POST http://localhost:8000/telemetry \
 ```
 
 ### 8.2 Enviar Comando de Linguagem Natural
-```bash
+````bash
 curl -X POST http://localhost:8000/chat \
      -H "Content-Type: application/json" \
      -d '{
@@ -292,7 +292,7 @@ curl -X POST http://localhost:8000/chat \
 ```
 
 **Resposta JSON Recebida:**
-```json
+````json
 {
   "decision": {
     "action": "execute",
@@ -314,7 +314,7 @@ curl -X POST http://localhost:8000/chat \
 ```
 
 ### 8.3 Submeter Feedback / Ensinar Hábito
-```bash
+````bash
 curl -X POST http://localhost:8000/feedback \
      -H "Content-Type: application/json" \
      -d '{
@@ -335,7 +335,7 @@ Para operar os módulos Sonoff sem nenhuma dependência de nuvem, conta eWeLink 
   - `firmware_templates/tasmota_comandos_setup.txt` (comandos `Backlog` para console do Tasmota, incluindo `PulseTime 10` seguro de 1s no `portao_garagem`)
   - `firmware_templates/esphome_portao_garagem.yaml` e `firmware_templates/esphome_switch_generico.yaml` (MQTT + REST API fallback na porta `80`)
 - Pelo painel web (`⚙️ MQTT`) ou via API `POST /mqtt/devices/pair`:
-```bash
+````bash
 curl -X POST http://localhost:8000/mqtt/devices/pair \
      -H "Content-Type: application/json" \
      -d '{
@@ -352,7 +352,7 @@ curl -X POST http://localhost:8000/mqtt/devices/pair \
 ## 10. Execução da Bateria de Testes Automatizados
 
 Para executar os testes unitários e de integração:
-```bash
+````bash
 pytest tests/ -v
 ```
 
@@ -369,3 +369,80 @@ Cobertura dos testes:
 
 Projeto desenvolvido sob os mais rigorosos padrões de **Edge AI**, **segurança elétrica/doméstica** e **eficiência computacional**, permitindo transformar qualquer mini PC ou servidor doméstico em um cérebro inteligente, privado e independente de nuvem externa.
 
+
+---
+
+## 11. Integração Android & Ponte de Interface Oficial eWeLink (UI Bridge)
+
+O **iaparacasa** dispõe de uma rota de integração legítima que opera sobre a interface visual do aplicativo oficial eWeLink (com.coolkit) em execução em um emulador Android oficial.
+
+### 11.1 Instalação do Emulador e Criação do AVD
+1. Instale o **Android Studio** ou as **Android SDK Command-Line Tools** a partir dos repositórios oficiais do Google.
+2. Instale os componentes necessários:
+   ```bash
+   sdkmanager "platform-tools" "emulator" "platforms;android-34" "system-images;android-34;google_apis_playstore;x86_64"
+   ``
+3. Crie um Dispositivo Virtual Android (AVD) com Google Play Store e resolução mínima de 1080x1920 sem root:
+   ```bash
+   avdmanager create avd -n ewelink_test -k "system-images;android-34;google_apis_playstore;x86_64" -d pixel_6 --force
+   ``
+4. Inicie o emulador:
+   ```bash
+   emulator -avd ewelink_test -no-snapshot -gpu host
+   ``
+5. Confirme a conectividade:
+   ```bash
+   adb devices
+   ``
+
+### 11.2 Instalação do App e Login Manual Seguro
+- **Instalação**: Baixe o aplicativo eWeLink **exclusivamente via Google Play Store** no emulador.
+- **Segurança de Credenciais**: O usuário deve realizar o login manualmente na tela do app. O sistema **não intercepta**, **não descriptografa**, **não faz bypass de TLS**, nem armazena senhas, tokens ou cookies.
+- **Não invasão**: Não são acessados bancos internos (/data/data/com.coolkit), arquivos privados ou APIs internas não documentadas.
+
+### 11.3 Inventário Visual e Teste Controlado de Iluminação
+- O módulo pp/ewelink_ui_bridge.py inspeciona a hierarquia visível via db shell uiautomator dump e exporta o inventário em data/ewelink_ui_devices.json.
+- **Teste Controlado de Segurança**:
+  - Exige confirmação prévia explícita do usuário (user_confirmed=True).
+  - Atua **somente sobre dispositivos do tipo iluminação** (light).
+  - Dispositivos sensíveis como portões, fechaduras, alarmes, sensores e ar condicionado são **rigorosamente ignorados**.
+  - O ciclo aciona power_on, aguarda até 5 segundos, confirma a mudança visual de estado no app, aciona power_off, aguarda até 5 segundos e confirma o desligamento.
+  - O histórico é registrado em data/ewelink_ui_test_results.json contendo apenas dados estruturados sem informações pessoais.
+
+### 11.4 Endpoint de Controle via UI
+- **Endpoint**: POST /ewelink/ui-control
+- **Parâmetros**:
+  - 	arget_device: Nome visível do dispositivo.
+  - command: power_on ou power_off.
+  - equire_confirmation: 	rue por padrão.
+  - confirmation_granted: 	rue apenas com autorização prévia do morador.
+- **Exemplo de Resposta**:
+  ```json
+  {
+    "success": true,
+    "mode": "ewelink_ui",
+    "target_device": "luz_sala",
+    "command": "power_on",
+    "verified": true,
+    "details": "Estado 'on' confirmado visualmente no aplicativo eWeLink."
+  }
+  ``
+
+### 11.5 Hierarquia de Rotas Alternativas
+Ao despachar comandos, o sistema avalia as seguintes rotas na ordem estrita de prioridade:
+1. official_api: CoolKit OpenAPI v2 / OAuth2 em nuvem.
+2. ewelink_api_next: Pacote SDK oficial da comunidade.
+3. lan: Controle Sonoff/eWeLink direto na rede local (DIY REST na porta 8081 ou AES-128-CBC criptografado).
+4. mqtt: Firmware aberto Tasmota / ESPHome via broker Mosquitto.
+5. ewelink_ui: Automação visual da UI do aplicativo oficial Android via ADB.
+6. simulated_local: Simulação em memória para desenvolvimento local.
+   > **Regra de Segurança**: O sistema **nunca retorna sucesso** se o comando foi apenas simulado localmente (success: false).
+
+### 11.6 Limitações e Riscos
+- **Limitações**:
+  - Requer que o emulador ou aparelho Android permaneça ligado com o aplicativo aberto em primeiro plano.
+  - Latência de 1 a 3 segundos para atualização e dump visual do UIAutomator.
+  - Atualizações visuais do aplicativo podem alterar a árvore de componentes e exigir ajuste nos seletores.
+- **Riscos e Mitigações**:
+  - **Risco de atuação indevida**: Mitigado pelo bloqueio compulsório de confirmação para portões e fechaduras, e rejeição de comandos em hardware físico sem autorização.
+  - **Bloqueios e CAPTCHA**: Se o app eWeLink apresentar desafios anti-bot, 2FA ou CAPTCHA, a automação cessa imediatamente e solicita intervenção humana.

@@ -12,9 +12,10 @@ import re
 import sqlite3
 import threading
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from app.config import settings
 
@@ -113,10 +114,15 @@ class LongTermMemory:
     def _ensure_db_dir(self):
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    def _get_connection(self) -> sqlite3.Connection:
+    @contextmanager
+    def _get_connection(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_sqlite(self):
         """Inicializa as tabelas de preferências aprendidas, histórico e telemetria."""

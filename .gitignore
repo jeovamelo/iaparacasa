@@ -1,7 +1,7 @@
-# Python artifacts
+﻿# Python artifacts
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 *.so
 .Python
 build/
@@ -27,13 +27,24 @@ env/
 ENV/
 
 # Data & Model weights (Do not commit binary GGUF files or runtime DBs)
+*.db
+*.sqlite
+*.sqlite3
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+data2/*.db
+data2/*.sqlite
+data2/*.sqlite3
 models/*.gguf
 models/*.bin
 !models/.gitkeep
 !data/.gitkeep
+!data2/.gitkeep
+!data2/mosquitto.conf
+
+# Docker image archives
+*.tar
 
 # Environment variables
 .env
@@ -49,4 +60,3 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
-

@@ -3,164 +3,142 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>iaparacasa - Edge AI Home Intelligence</title>
+  <title>iaparacasa - Smart Home Web</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
 </head>
-<body>
-  <!-- Header / Barra Superior de Status -->
-  <header class="app-header">
-    <div class="header-left">
-      <div class="logo-icon">🏠</div>
-      <div>
-        <h1 class="logo-title">iaparacasa</h1>
-        <p class="logo-subtitle">Edge AI Home Automation &bull; Mini PC / VPS</p>
-      </div>
+<body class="ewelink-web-body">
+
+  <!-- =======================================================================
+       1. Barra Lateral de Navegação (Navigation Rail à Esquerda)
+       ======================================================================= -->
+  <aside class="nav-rail" aria-label="Navegação Lateral">
+    <div class="rail-logo">
+      <span class="logo-e">e</span>
     </div>
-    <div class="header-status">
-      <span class="badge badge-success" id="badge-status">● Sistema Operacional</span>
-      <span class="badge badge-info" id="badge-engine">🧠 Engine: Conectando...</span>
-      <span class="badge badge-warning" id="badge-ram">💾 RAM: -- MB</span>
-      <span class="badge badge-info" id="badge-mqtt">📡 MQTT: Verificando...</span>
-      <span class="badge badge-purple" id="badge-ewelink">⚡ LAN / Open Firmware</span>
+
+    <nav class="rail-icons">
+      <button class="rail-btn active" title="Minha Casa (Interruptores)">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+      </button>
+      <button class="rail-btn" title="Cenas Inteligentes" onclick="toast('Cenas e automações ativas em segundo plano')">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+      </button>
+      <button class="rail-btn" title="Configurar MQTT / Tasmota" onclick="openMqttModal()">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+      </button>
+      <button class="rail-btn" title="Sincronizar Dispositivos" onclick="syncEwelinkDevices()" id="btn-sync">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+      </button>
+    </nav>
+  </aside>
+
+  <!-- =======================================================================
+       2. Layout Principal (Área de Interruptores + Barra Lateral de Chat)
+       ======================================================================= -->
+  <div class="app-main-layout">
+    
+    <!-- Coluna Esquerda/Centro: Interruptores em Quadrados (Estilo eWeLink Web) -->
+    <div class="switches-viewport">
+      <!-- Barra de Topo com Contadores e Filtro -->
+      <header class="web-topbar">
+        <div class="topbar-stats">
+          <div class="stat-pill stat-pill-on" id="pill-on-count">
+            <span class="pill-icon">💡</span>
+            <span id="txt-on-count">-- LIGADO</span>
+          </div>
+          <div class="stat-pill stat-pill-off" id="pill-off-count">
+            <span class="pill-icon">🔌</span>
+            <span id="txt-off-count">-- Desligados</span>
+          </div>
+          <div class="system-meta-badges">
+            <span class="meta-tag" id="badge-engine">🧠 Qwen 2.5 1.5B</span>
+            <span class="meta-tag" id="badge-ram">💾 RAM: -- MB</span>
+            <span class="meta-tag" id="badge-mqtt">📡 MQTT: Online</span>
+            <span id="badge-status" style="display:none;"></span>
+            <span id="sync-status-text" style="display:none;"></span>
+          </div>
+        </div>
+
+        <div class="topbar-search">
+          <div class="search-input-box">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#94a3b8"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <input type="text" id="device-search-input" placeholder="Pesquisar pelo nome..." oninput="filterDevices(this.value)" />
+          </div>
+        </div>
+      </header>
+
+      <!-- Scroll dos Interruptores Quadrados por Cômodo/Área -->
+      <main class="switches-scroll-area" id="switches-container">
+        <!-- Renderizado dinamicamente pelo app.js em formato de cards quadrados (tiles) -->
+        <div class="loading-state">Carregando interruptores da casa...</div>
+      </main>
     </div>
-  </header>
 
-  <!-- Container Principal em Grid -->
-  <main class="dashboard-grid">
-    <!-- Coluna Esquerda: Telemetria e Controles Manuais -->
-    <section class="panel-left">
-      <!-- Cards de Sensores -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">📡 Sensores em Tempo Real (Telemetria)</span>
-          <button class="btn-refresh" onclick="updateDashboard()" title="Atualizar dados">&#x21bb;</button>
-        </div>
-        <div class="telemetry-grid">
-          <div class="sensor-box" id="sensor-temp-box">
-            <div class="sensor-icon">🌡️</div>
-            <div class="sensor-value" id="val-temp">--.- °C</div>
-            <div class="sensor-label">Temperatura Sala</div>
-            <div class="sensor-sub" id="val-hum">Umidade: --%</div>
-          </div>
-          <div class="sensor-box" id="sensor-motion-box">
-            <div class="sensor-icon">🚶</div>
-            <div class="sensor-value" id="val-motion">Ausente</div>
-            <div class="sensor-label">Presença na Sala</div>
-            <div class="sensor-sub" id="val-motion-time">Aguardando leitura</div>
+    <!-- Coluna Direita: Barra Lateral Compacta de Chat Natural (Edge AI) -->
+    <aside class="chat-sidebar" aria-label="Assistente Residencial">
+      <div class="sidebar-header">
+        <div class="assistant-id">
+          <span class="assistant-avatar">🤖</span>
+          <div>
+            <h2 class="assistant-name">iaparacasa AI</h2>
+            <p class="assistant-status">Edge AI Local &bull; Sem Nuvem</p>
           </div>
         </div>
+        <div style="display:flex;gap:4px;">
+          <button class="icon-btn-ghost" id="btn-toggle-voice" title="Ativar/Desativar Leitura em Voz Alta" onclick="toggleVoiceOutput()">
+            <span id="voice-icon">🔊</span>
+          </button>
+          <button class="icon-btn-ghost" title="Limpar conversa" onclick="clearChat()">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          </button>
+        </div>
       </div>
 
-      <!-- Controle Manual de Dispositivos (Tasmota / ESPHome / eWeLink) -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">🔌 Dispositivos (Minha Casa)</span>
-          <div style="display: flex; gap: 6px;">
-            <button class="btn-sync" onclick="openMqttModal()" id="btn-mqtt-pair" title="Configurar dispositivo com Tasmota / ESPHome / MQTT">⚙️ MQTT</button>
-            <button class="btn-sync" onclick="syncEwelinkDevices()" id="btn-sync" title="Sincronizar / Atualizar topologia">&#x21bb; Sincronizar</button>
+      <!-- Sugestões de Comandos Rápidos em Chips -->
+      <div class="sidebar-quick-chips">
+        <button class="chip-sm" onclick="sendPrompt('Abra o portão da garagem')">🚪 Portão</button>
+        <button class="chip-sm" onclick="sendPrompt('Ligue o refletor da entrada e a luz da frente')">💡 Luzes Entrada</button>
+        <button class="chip-sm" onclick="sendPrompt('Acenda o jardim deck e jardim principal')">🌿 Jardins</button>
+        <button class="chip-sm" onclick="sendPrompt('Ligue o ar condicionado da sala')">❄️ Ar Sala</button>
+      </div>
+
+      <!-- Histórico de Mensagens com Conversação Natural (Sem Códigos JSON) -->
+      <div class="sidebar-messages" id="chat-messages">
+        <div class="chat-bubble bubble-assistant">
+          <div class="bubble-header">
+            <strong>iaparacasa</strong>
+            <span class="bubble-time">Agora</span>
+          </div>
+          <div class="bubble-content">
+            Olá! Estou aqui para ajudar você a controlar qualquer interruptor, portão ou climatização da casa. O que deseja fazer?
           </div>
         </div>
-        <p class="card-desc" id="sync-status-text">Offline Local: Tasmota / ESPHome (MQTT + HTTP) &amp; eWeLink LAN</p>
-        <div class="device-controls" id="ewelink-device-groups">
-          <div class="empty-state">Carregando dispositivos Sonoff / eWeLink...</div>
-        </div>
       </div>
 
-      <!-- Simulador de Telemetria Rápida para Testes -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">🧪 Injetor de Telemetria para Teste</span>
-        </div>
-        <div class="sim-controls">
-          <button class="btn btn-secondary" onclick="simulateTelemetry(29.5, 1)">🔥 Calor Intenso (29.5°C + Presença)</button>
-          <button class="btn btn-secondary" onclick="simulateTelemetry(21.0, 0)">❄️ Agradável (21.0°C + Vazio)</button>
-        </div>
-      </div>
-    </section>
+      <!-- Barra de Input de Comando em Linguagem Natural e Voz -->
+      <form class="sidebar-input-bar" onsubmit="event.preventDefault(); submitChat();">
+        <input type="text" id="chat-input" placeholder="Converse com a casa..." autocomplete="off" required />
+        <button type="button" class="btn-mic-round" id="btn-mic" title="Falar por voz (Microfone)" onclick="toggleVoiceRecording()">
+          <span id="mic-icon">🎙️</span>
+        </button>
+        <button type="submit" class="btn-send-round" id="btn-send" title="Enviar">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </form>
+    </aside>
 
-    <!-- Coluna Central/Direita: Chat Natural, Decisão JSON e Auditoria de Memória -->
-    <section class="panel-right">
-      <!-- Chat com Edge LLM -->
-      <div class="card chat-card">
-        <div class="card-header">
-          <span class="card-title">💬 Assistente Doméstico (Linguagem Natural)</span>
-          <span class="chat-hint">In-Context Learning Ativo</span>
-        </div>
-
-        <!-- Atalhos de Comandos Rápidos -->
-        <div class="quick-prompts">
-          <span class="quick-title">Sugestões:</span>
-          <button class="chip" onclick="sendPrompt('Abra o portão da garagem por favor')">🚪 Portão Garagem</button>
-          <button class="chip" onclick="sendPrompt('Está muito calor na sala, liga o ar condicionado')">❄️ Ar Sala</button>
-          <button class="chip" onclick="sendPrompt('Ligue a luz da sala')">💡 Luz Sala</button>
-          <button class="chip" onclick="sendPrompt('Acenda o jardim deck e jardim principal')">🌿 Jardim Deck</button>
-          <button class="chip" onclick="sendPrompt('Ligue o jardim da garagem')">🏮 Jardim Garagem</button>
-          <button class="chip" onclick="sendPrompt('Ligue o corredor de cima')">🪜 Corredor Cima</button>
-        </div>
-
-        <!-- Área de Histórico de Mensagens -->
-        <div class="chat-messages" id="chat-messages">
-          <div class="chat-bubble bubble-assistant">
-            <div class="bubble-header">
-              <strong>🤖 iaparacasa</strong>
-              <span class="bubble-time">Agora</span>
-            </div>
-            <div class="bubble-content">
-              Olá! Sou o cérebro da sua casa inteligente. Como posso ajudar com os atuadores, portão ou climatização hoje?
-            </div>
-          </div>
-        </div>
-
-        <!-- Input de Envio de Mensagem -->
-        <form class="chat-input-bar" onsubmit="event.preventDefault(); submitChat();">
-          <input type="text" id="chat-input" placeholder="Digite uma instrução (ex: 'abra o portão', 'está calor', 'prefiro o ar em 22C')..." autocomplete="off" required />
-          <button type="submit" class="btn btn-primary" id="btn-send">Enviar</button>
-        </form>
-      </div>
-
-      <!-- Memória de Longo Prazo e Hábitos Aprendidos (Auditoria) -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">🧠 Memória Semântica &amp; Hábitos Aprendidos (SQLite)</span>
-          <span class="badge badge-success" id="count-prefs">3 Hábitos</span>
-        </div>
-        <p class="card-desc">
-          Padrões e regras aprendidas ao longo do tempo através dos seus comandos e feedbacks (sem necessidade de retreinamento do modelo).
-        </p>
-        <div class="preferences-list" id="preferences-list">
-          <!-- Renderizado via JS -->
-          <div class="empty-state">Carregando preferências locais...</div>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <!-- Modal de Feedback e Correção de Hábito -->
-  <div class="modal-overlay" id="feedback-modal" style="display: none;">
-    <div class="modal-box">
-      <h3>🛠️ Corrigir Decisão e Ensinar Hábito</h3>
-      <p class="modal-desc">
-        Explique como você prefere que o sistema aja nessa situação. A inteligência aprenderá esta regra imediatamente na memória de longo prazo.
-      </p>
-      <input type="hidden" id="modal-interaction-id" />
-      <div class="form-group">
-        <label for="modal-correction">O que você gostaria que tivesse sido feito?</label>
-        <textarea id="modal-correction" rows="3" placeholder="Ex: Quando passar de 28°C prefiro o ar em 21°C e não em 23°C..."></textarea>
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="closeFeedbackModal()">Cancelar</button>
-        <button class="btn btn-primary" onclick="submitCorrection()">Salvar Novo Hábito</button>
-      </div>
-    </div>
   </div>
+
+  <!-- Toast Notificação Flutuante Discreta -->
+  <div class="toast-popup" id="toast-popup" style="display:none;"></div>
 
   <!-- Modal de Pareamento MQTT / Tasmota / ESPHome -->
   <div class="modal-overlay" id="mqtt-modal" style="display: none;">
     <div class="modal-box">
       <h3>⚙️ Configurar Firmware Aberto (Tasmota / ESPHome)</h3>
       <p class="modal-desc">
-        Vincule um dispositivo da sua casa ao broker Mosquitto local ou HTTP direto para operar 100% offline sem nuvem eWeLink.
+        Vincule um dispositivo ao broker Mosquitto local para operar 100% offline.
       </p>
       <div class="form-group">
         <label for="mqtt-device-select">Dispositivo Alvo</label>
@@ -169,38 +147,57 @@
       <div class="form-group">
         <label for="mqtt-firmware-type">Firmware / Driver</label>
         <select id="mqtt-firmware-type">
-          <option value="tasmota">Tasmota (MQTT + HTTP fallback)</option>
-          <option value="esphome">ESPHome (MQTT + REST API)</option>
-          <option value="mqtt_json">MQTT JSON Genérico (iaparacasa/&lt;tópico&gt;/cmd)</option>
+          <option value="tasmota">Tasmota (MQTT + HTTP)</option>
+          <option value="esphome">ESPHome (MQTT + REST)</option>
+          <option value="mqtt_json">MQTT JSON Genérico</option>
           <option value="ewelink">eWeLink LAN / DIY Padrão</option>
         </select>
       </div>
       <div class="form-group">
-        <label for="mqtt-topic-input">Tópico MQTT (ex: luz_sala, portao_garagem, tasmota_ABC123)</label>
+        <label for="mqtt-topic-input">Tópico MQTT</label>
         <input type="text" id="mqtt-topic-input" placeholder="luz_sala" />
       </div>
       <div class="form-group">
-        <label for="mqtt-ip-input">IP Local (opcional para fallback HTTP direto na porta 80)</label>
-        <input type="text" id="mqtt-ip-input" placeholder="192.168.1.151" />
+        <label for="mqtt-ip-input">IP Local (HTTP porta 80)</label>
+        <input type="text" id="mqtt-ip-input" placeholder="192.168.100.x" />
       </div>
       <div class="form-row-two">
         <div class="form-group">
-          <label for="mqtt-channel-input">Canal (0 = POWER1, 1 = POWER2...)</label>
+          <label for="mqtt-channel-input">Canal (0 = POWER1...)</label>
           <input type="number" id="mqtt-channel-input" min="0" max="7" value="0" />
         </div>
         <div class="form-group">
-          <label for="mqtt-domain-input">Domínio ESPHome</label>
+          <label for="mqtt-domain-input">Domínio</label>
           <select id="mqtt-domain-input">
             <option value="switch">switch</option>
             <option value="light">light</option>
-            <option value="button">button (pulso)</option>
+            <option value="button">button</option>
             <option value="climate">climate</option>
           </select>
         </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeMqttModal()">Cancelar</button>
-        <button class="btn btn-primary" onclick="saveMqttDeviceConfig()">Salvar no SQLite</button>
+        <button class="btn btn-primary" onclick="saveMqttDeviceConfig()">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Feedback e Correção de Hábito -->
+  <div class="modal-overlay" id="feedback-modal" style="display: none;">
+    <div class="modal-box">
+      <h3>🛠️ Ensinar Preferência à IA</h3>
+      <p class="modal-desc">
+        Explique como você prefere que a inteligência artificial execute esta ação da próxima vez.
+      </p>
+      <input type="hidden" id="modal-interaction-id" />
+      <div class="form-group">
+        <label for="modal-correction">O que deve ser feito nesta situação?</label>
+        <textarea id="modal-correction" rows="3" placeholder="Ex: Ao ligar as luzes da frente, acenda também o refletor da entrada..."></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeFeedbackModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="submitCorrection()">Salvar Regra</button>
       </div>
     </div>
   </div>
@@ -208,4 +205,3 @@
   <script src="/static/app.js"></script>
 </body>
 </html>
-

@@ -1,14 +1,14 @@
-@echo off
+﻿@echo off
 title iaparacasa - Entrar no Container Docker
 echo ========================================================
-echo    Conectando ao terminal interativo do iaparacasa-edge
+echo    Conectando ao terminal interativo do iaparacasa2-edge
 echo ========================================================
 echo.
-docker exec -it iaparacasa-edge bash
+docker exec -it iaparacasa2-edge bash
 if %errorlevel% neq 0 (
     echo.
     echo [*] Tentando com shell 'sh'...
-    docker exec -it iaparacasa-edge sh
+    docker exec -it iaparacasa2-edge sh
 )
 if %errorlevel% neq 0 (
     echo.
@@ -17,4 +17,5 @@ if %errorlevel% neq 0 (
     echo.
     pause
 )
+
 

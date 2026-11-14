@@ -4,7 +4,9 @@ Disponibiliza endpoints de inferência contextual (/chat), aprendizado por feedb
 ingestão de telemetria (/telemetry) e governança de preferências locais.
 """
 
+import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -176,6 +178,54 @@ def reload_llm_model():
     }
 
 
+def _extract_routine_schedule(prompt: str) -> Optional[Dict[str, Any]]:
+    """Extrai intenções temporizadas (ex: ligar e desligar 3 vezes a cada X segundos ou ligar por X minutos)."""
+    clean = (prompt or "").lower()
+    # Padrão repetição: ligar e desligar X vezes a cada Y segundos/minutos
+    m_repeat = re.search(r'(?:ligar|ligue|acionar|acione|piscar|pisque).*?(\d+)\s*vezes.*?(?:a cada|em intervalos? de)?\s*(\d+)\s*(segundo|minuto|s|m)', clean)
+    if m_repeat:
+        count = int(m_repeat.group(1))
+        unit_val = int(m_repeat.group(2))
+        unit_type = m_repeat.group(3)
+        interval = unit_val * 60 if ("minuto" in unit_type or unit_type == "m") else unit_val
+        return {"type": "repeat", "count": count, "interval": max(1, interval)}
+
+    # Padrão duração: ligar por X minutos/segundos
+    m_dur = re.search(r'(?:ligar|ligue|acione|acionar).*?por\s*(\d+)\s*(segundo|minuto|s|m)', clean)
+    if m_dur:
+        unit_val = int(m_dur.group(1))
+        unit_type = m_dur.group(2)
+        duration = unit_val * 60 if ("minuto" in unit_type or unit_type == "m") else unit_val
+        return {"type": "duration", "duration": max(1, duration)}
+
+    return None
+
+
+async def _run_timed_routine(target_device: str, routine_cfg: Dict[str, Any], initial_params: Dict[str, Any]):
+    """Executa a máquina de estados / rotina temporizada em segundo plano no servidor."""
+    try:
+        if routine_cfg.get("type") == "duration":
+            dur = routine_cfg["duration"]
+            logger.info(f"[Rotina Servidor] Ligando {target_device} por {dur}s...")
+            ewelink_gateway.execute_command(target_device, CommandType.POWER_ON, initial_params)
+            await asyncio.sleep(dur)
+            logger.info(f"[Rotina Servidor] Tempo esgotado. Desligando {target_device}...")
+            ewelink_gateway.execute_command(target_device, CommandType.POWER_OFF, initial_params)
+        elif routine_cfg.get("type") == "repeat":
+            count = routine_cfg["count"]
+            interval = routine_cfg["interval"]
+            logger.info(f"[Rotina Servidor] Ciclo {count}x a cada {interval}s em {target_device}...")
+            for i in range(count):
+                ewelink_gateway.execute_command(target_device, CommandType.POWER_ON, initial_params)
+                await asyncio.sleep(interval)
+                ewelink_gateway.execute_command(target_device, CommandType.POWER_OFF, initial_params)
+                if i < count - 1:
+                    await asyncio.sleep(interval)
+            logger.info(f"[Rotina Servidor] Ciclos concluídos para {target_device}.")
+    except Exception as e:
+        logger.error(f"[Rotina Servidor] Erro na execução da rotina: {e}")
+
+
 @app.post("/chat", response_model=ChatResponse, tags=["Inferência e Decisão"])
 def process_chat(request: ChatRequest):
     """
@@ -213,16 +263,32 @@ def process_chat(request: ChatRequest):
         action=decision.action.value
     )
 
-    # 5. Despacho para hardware físico (eWeLink / Sonoff LAN ou Nuvem) se for comando de execução
-    if decision.action == ActionType.EXECUTE:
+    hardware_result = None
+    # 5. Despacho para hardware físico ou máquina de estados / rotina temporizada do servidor
+    routine_cfg = _extract_routine_schedule(request.prompt)
+    if routine_cfg and decision.action == ActionType.EXECUTE:
+        asyncio.create_task(
+            _run_timed_routine(
+                target_device=decision.target_device,
+                routine_cfg=routine_cfg,
+                initial_params=decision.params,
+            )
+        )
+        if routine_cfg.get("type") == "repeat":
+            decision.response_text = f"Entendido! Iniciando rotina no servidor: vou ligar e desligar {decision.target_device} {routine_cfg['count']} vezes a cada {routine_cfg['interval']} segundos."
+        elif routine_cfg.get("type") == "duration":
+            decision.response_text = f"Com certeza! Ligando {decision.target_device} agora e desligarei automaticamente após {routine_cfg['duration']} segundos."
+        hardware_result = {"success": True, "mode": "system_timed_routine", "details": routine_cfg}
+    elif decision.action == ActionType.EXECUTE:
         try:
-            ewelink_gateway.execute_command(
+            hardware_result = ewelink_gateway.execute_command(
                 target_device=decision.target_device,
                 command=decision.command,
                 params=decision.params
             )
         except Exception as e:
             logger.warning(f"Erro ao despachar comando para atuador físico: {e}")
+            hardware_result = {"success": False, "mode": "hardware_error", "details": str(e)}
 
     # 6. Aprendizado automático se o modelo detectou nova preferência descritiva válida
     if decision.learned_preference:
@@ -249,6 +315,7 @@ def process_chat(request: ChatRequest):
     engine_name = "mock_heuristics" if eng.is_mock else "llama_cpp_qwen2.5_q4"
 
     return ChatResponse(
+        hardware_result=hardware_result,
         decision=decision,
         ewelink_command=decision.to_ewelink_payload(),
         interaction_id=interaction_id,
@@ -398,6 +465,16 @@ def sync_ewelink_devices():
 def login_ewelink_cloud():
     """Autentica no portal CoolKit Open Platform API v2 utilizando credenciais configuradas no .env."""
     return ewelink_gateway.login_cloud()
+
+
+@app.patch("/ewelink/devices/{target_device}/address", tags=["Gateway eWeLink"])
+def update_ewelink_address(target_device: str, ip_address: str, port: int = 8081):
+    try:
+        return ewelink_gateway.update_device_address(target_device, ip_address, port)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Dispositivo não encontrado")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @app.post("/ewelink/devices/pair", tags=["Gateway eWeLink"])

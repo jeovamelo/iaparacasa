@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 title iaparacasa - Iniciar Servico Docker
 echo ========================================================
 echo    Iniciando iaparacasa Edge AI via Docker Compose
@@ -15,9 +15,10 @@ echo Status dos containers ativos:
 docker ps
 echo.
 echo ========================================================
-echo    Servico disponivel em: http://localhost:8000
+echo    Servico disponivel em: http://localhost:8001
 echo    Para abrir o terminal do container, use: enter_container.bat
 echo ========================================================
 echo.
 pause
+
 

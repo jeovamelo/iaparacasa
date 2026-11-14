@@ -1,0 +1,58 @@
+[
+  {
+    "name": "Minha Casa",
+    "group": "Atuadores Locais",
+    "type": "switch",
+    "state": "off",
+    "online": true,
+    "source": "ewelink_ui"
+  },
+  {
+    "name": "Luz da Sala",
+    "group": "Atuadores Locais",
+    "type": "light",
+    "state": "off",
+    "online": true,
+    "source": "ewelink_ui"
+  },
+  {
+    "name": "Luz da Sala Botão Ligar",
+    "group": "Atuadores Locais",
+    "type": "light",
+    "state": "off",
+    "online": true,
+    "source": "ewelink_ui"
+  },
+  {
+    "name": "Luz do Corredor",
+    "group": "Atuadores Locais",
+    "type": "light",
+    "state": "off",
+    "online": true,
+    "source": "ewelink_ui"
+  },
+  {
+    "name": "Luz do Corredor Botão Ligar",
+    "group": "Atuadores Locais",
+    "type": "light",
+    "state": "off",
+    "online": true,
+    "source": "ewelink_ui"
+  },
+  {
+    "name": "Portão da Garagem",
+    "group": "Atuadores Locais",
+    "type": "climate",
+    "state": "off",
+    "online": true,
+    "source": "ewelink_ui"
+  },
+  {
+    "name": "Sensor de Presença",
+    "group": "Atuadores Locais",
+    "type": "sensor",
+    "state": "off",
+    "online": true,
+    "source": "ewelink_ui"
+  }
+]

@@ -163,18 +163,7 @@ class Settings(BaseSettings):
         description="Mapeamento opcional de dispositivos com firmware aberto (device_id -> {firmware_type, mqtt_topic, ip_address, is_multichannel, channel_outlet, entity_domain, entity_id})"
     )
     SONOFF_DEVICE_MAP: dict = Field(
-        default_factory=lambda: {
-            "varanda_superior": "192.168.1.140",
-            "corredor_cima": "192.168.1.141",
-            "jardim_deck": "192.168.1.142",
-            "corredor_externo": "192.168.1.143",
-            "jardim_varanda": "192.168.1.144",
-            "jardim_garagem": "192.168.1.145",
-            "jardim_principal": "192.168.1.146",
-            "portao_garagem": "192.168.1.150",
-            "luz_sala": "192.168.1.151",
-            "ar_condicionado_sala": "192.168.1.152",
-        },
+        default_factory=dict,
         description="Mapeamento de nomes de dispositivos para endereços IP locais em modo DIY"
     )
 

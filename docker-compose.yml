@@ -1,35 +1,41 @@
+name: iaparacasa2
+
 services:
-  iaparacasa:
+  iaparacasa2:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: iaparacasa-edge
+    image: iaparacasa2:latest
+    container_name: iaparacasa2-edge
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
-      # Monta pesos de modelos e banco SQLite persistente no host
-      - ./models:/app/models
-      - ./data:/app/data
+      - ./models:/app/models:ro
+      - ./data2:/app/data
     env_file:
       - .env
     environment:
-      - MODEL_PATH=/app/models/qwen2.5-1.5b-instruct-q4_k_m.gguf
-      - MODEL_REPO_ID=Qwen/Qwen2.5-1.5B-Instruct-GGUF
-      - MODEL_FILENAME=qwen2.5-1.5b-instruct-q4_k_m.gguf
-      - N_CTX=2048
-      - N_THREADS=4
-      - N_BATCH=256
-      - USE_MMAP=false
-      - TEMPERATURE=0.1
-      - DB_PATH=/app/data/iaparacasa_memory.db
-      - SYSTEM_PROMPT_PATH=/app/system_prompt.txt
-      - USE_MOCK_ENGINE=false
-      - LOG_LEVEL=info
-      - MQTT_ENABLED=${MQTT_ENABLED:-true}
-      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST:-mqtt-broker}
-      - MQTT_BROKER_PORT=${MQTT_BROKER_PORT:-1883}
-    # Restrição estrita de recursos para garantir operação abaixo de 2.5GB de RAM
+      MODEL_PATH: /app/models/qwen2.5-1.5b-instruct-q4_k_m.gguf
+      MODEL_REPO_ID: Qwen/Qwen2.5-1.5B-Instruct-GGUF
+      MODEL_FILENAME: qwen2.5-1.5b-instruct-q4_k_m.gguf
+      N_CTX: "2048"
+      N_THREADS: "4"
+      N_BATCH: "256"
+      USE_MMAP: "false"
+      TEMPERATURE: "0.1"
+      DB_PATH: /app/data/iaparacasa2_memory.db
+      SYSTEM_PROMPT_PATH: /app/system_prompt.txt
+      USE_MOCK_ENGINE: "false"
+      LOG_LEVEL: info
+      MQTT_ENABLED: "true"
+      MQTT_BROKER_HOST: mqtt-broker2
+      MQTT_BROKER_PORT: "1883"
+      MQTT_CLIENT_ID: iaparacasa2-edge
+      MQTT_TOPIC_PREFIX: iaparacasa2
+    depends_on:
+      mqtt-broker2:
+        condition: service_started
     deploy:
       resources:
         limits:
@@ -38,12 +44,12 @@ services:
         reservations:
           memory: 1000M
 
-  # Gateway MQTT Local para integração Tasmota / ESPHome / Home Assistant
-  mqtt-broker:
+  mqtt-broker2:
     image: eclipse-mosquitto:2
-    container_name: iaparacasa-mqtt
+    container_name: iaparacasa2-mqtt
     restart: unless-stopped
     ports:
-      - "1883:1883"
+      - "1884:1883"
     volumes:
-      - ./data/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./data2/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
